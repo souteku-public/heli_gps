@@ -42,6 +42,19 @@ dec.nodeX, dec.nodeY = 200, 200
 dec.par.callbacks = "gps_decode_callbacks"
 dec.inputConnectors[0].connect(audio)
 
+# TDのノードは参照されないと評価されない(遅延クック)ため、
+# gps_decodeを毎フレーム強制クックするExecute DATを置く。
+# これが無いとビューアを開いていない限り復調もテキスト更新も走らない。
+fc = c.op("force_cook") or c.create(executeDAT, "force_cook")
+fc.nodeX, fc.nodeY = 200, 50
+fc.par.framestart = True
+fc.text = (
+    "# gps_decode を毎フレーム強制クック(遅延評価対策)\n"
+    "def onFrameStart(frame):\n"
+    "    op('gps_decode').cook()\n"
+    "    return\n"
+)
+
 # --- テキスト描画 (フォント・サイズ・位置はこのTOPのパラメータでUI調整) ---
 text = c.op("overlay_text") or c.create(textTOP, "overlay_text")
 text.nodeX, text.nodeY = 450, 200

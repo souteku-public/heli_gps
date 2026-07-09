@@ -211,6 +211,7 @@ project.cookRate = 59.94
 
 | 症状 | 対処 |
 |---|---|
+| テキストが初期表示のまま一切変わらない | `force_cook`(Execute DAT)があるか確認。無ければbuild_network.pyを再実行(TDは参照されないノードを評価しないため、gps_decodeの強制クックが必要) |
 | 文字が「□□□」になる | overlay_textのFontを日本語フォント(Yu Gothic等)に |
 | 住所が出ない/更新されない | gps_decodeビューアのfixが0か確認。0でなければ音声チャンネル番号を順に変更 |
 | latが0のまま | 音声が来ていない。audio_inのDevice/波形を確認 |
