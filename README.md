@@ -52,10 +52,12 @@ python -m nnn_decoder.app
 
 - 測位状態を色付きで表示(緑=正常測位 / 黄=バックアップ / 赤=使用不能・受信途絶)
 - 緯度経度(WGS84・度分秒/10進度)、高度、PDOP、衛星数、局IDを表示
+- **住所変換**: 国土地理院APIで市区町村・町丁目を表示
 - 「地図で開く」でGoogle Mapsに現在位置を表示
 - 「CSVログ保存」で受信履歴をCSV保存
 - 「NMEAをUDP送出」でGGA/RMCセンテンスを `127.0.0.1:10110` へ送出
   (OpenCPN・gpsd等の地図ソフトでそのまま航跡表示できます)
+- 「OSC送出」で位置・住所を `127.0.0.1:9000` へ送出(TouchDesigner連携用)
 
 ### 2. CLI (WAV/映像ファイルの復調)
 
@@ -110,10 +112,20 @@ nnn_decoder/
   pipeline.py   音声→位置 の一気通貫ストリーミングパイプライン
   modulator.py  エンコーダシミュレータ(試験用MSK音声生成)
   nmea.py       NMEA 0183 (GGA/RMC) 生成・UDP送出
+  geocode.py    逆ジオコーディング(国土地理院API + 市区町村テーブル同梱)
+  osc.py        OSC送出 (TouchDesigner等への連携)
   app.py        GUIアプリケーション (tkinter)
-  cli.py        WAVファイル復調CLI
+  cli.py        WAV/映像ファイル復調CLI (--address で住所付き)
+touchdesigner/  SDI入力→住所テロップ→1080i Fill&Key出力 の連携一式
+                (セットアップガイド: touchdesigner/README_TD.md)
 tests/          変調→復調ラウンドトリップ試験(雑音・分割・破損フレーム含む)
 ```
+
+## SDIテロップ送出 (UltraStudio + TouchDesigner)
+
+UltraStudioのSDI入力(EMB音声)からGPSを復調し、市区町村テロップを
+1080iのFill&KeyでSDI出力する構成は `touchdesigner/README_TD.md` を
+参照してください。フォント・文字位置はTouchDesignerのUI上で調整できます。
 
 ## テスト実行
 

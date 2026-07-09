@@ -21,8 +21,10 @@ from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
 
+from .geocode import AsyncReverseGeocoder
 from .geodesy import deg_to_dms_str
 from .nmea import NmeaUdpSender
+from .osc import OscSender
 from .pipeline import DecoderPipeline
 
 try:
@@ -45,6 +47,8 @@ class DecoderApp:
         self._running = False
         self._pipe: DecoderPipeline | None = None
         self._nmea: NmeaUdpSender | None = None
+        self._geo: AsyncReverseGeocoder | None = None
+        self._osc: OscSender | None = None
         self._csv_file = None
         self._csv_writer = None
         self._level = 0.0
@@ -82,6 +86,12 @@ class DecoderApp:
         self.csv_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(cfg, text="CSVログ保存", variable=self.csv_var).grid(
             row=2, column=3, sticky="w", **pad)
+        self.geo_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(cfg, text="住所変換 (国土地理院API)",
+                        variable=self.geo_var).grid(row=3, column=1, columnspan=2, sticky="w", **pad)
+        self.osc_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(cfg, text="OSC送出 (TD連携 127.0.0.1:9000)",
+                        variable=self.osc_var).grid(row=3, column=3, sticky="w", **pad)
 
         btns = ttk.Frame(self.root)
         btns.pack(fill="x", **pad)
@@ -112,6 +122,8 @@ class DecoderApp:
         self.deg_lbl.pack()
         self.alt_lbl = tk.Label(pos, text="高度: ---- m", font=("", 16))
         self.alt_lbl.pack(pady=4)
+        self.addr_lbl = tk.Label(pos, text="住所: ----", font=("", 16, "bold"), fg="#06c")
+        self.addr_lbl.pack(pady=2)
         self.meta_lbl = tk.Label(pos, text="ID: --   PDOP: --   衛星数: --")
         self.meta_lbl.pack()
         self.stats_lbl = tk.Label(pos, text="正常パケット: 0   エラー: 0", fg="gray")
@@ -153,6 +165,8 @@ class DecoderApp:
 
         self._pipe = DecoderPipeline(fs, baud=int(self.baud_var.get()))
         self._nmea = NmeaUdpSender() if self.nmea_var.get() else None
+        self._geo = AsyncReverseGeocoder() if self.geo_var.get() else None
+        self._osc = OscSender() if self.osc_var.get() else None
         if self.csv_var.get():
             path = filedialog.asksaveasfilename(
                 defaultextension=".csv", initialfile=f"heligps_{datetime.now():%Y%m%d_%H%M%S}.csv")
@@ -198,6 +212,12 @@ class DecoderApp:
         if self._nmea:
             self._nmea.close()
             self._nmea = None
+        if self._geo:
+            self._geo.close()
+            self._geo = None
+        if self._osc:
+            self._osc.close()
+            self._osc = None
         if self._csv_file:
             self._csv_file.close()
             self._csv_file = None
@@ -221,6 +241,11 @@ class DecoderApp:
                     self._last_pkt_time = time.monotonic()
                 if self._nmea:
                     self._nmea.send(pkt)
+                if self._geo:
+                    self._geo.submit(pkt.lat_wgs84, pkt.lon_wgs84)
+                if self._osc:
+                    addr = self._geo.current if self._geo else None
+                    self._osc.send_packet(pkt, addr.text("city") if addr else "")
                 if self._csv_writer:
                     self._csv_writer.writerow(
                         [datetime.now().isoformat(timespec="seconds"),
@@ -248,6 +273,9 @@ class DecoderApp:
             self.meta_lbl.config(
                 text=f"ID: {pkt.station_id}   PDOP: {pkt.pdop or '--'}   "
                      f"衛星数: {pkt.satellites if pkt.satellites is not None else '--'}")
+            addr = self._geo.current if self._geo else None
+            if addr is not None:
+                self.addr_lbl.config(text=f"住所: {addr.text('town')}")
             if self._running:
                 if age is not None and age > STALE_SEC:
                     self.status_lbl.config(text=f"受信途絶 ({age:.0f}秒)", bg="#c33")

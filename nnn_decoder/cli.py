@@ -131,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="映像ファイル内の音声トラック番号 (既定 0)")
     ap.add_argument("--invert", action="store_true", help="マーク/スペース反転")
     ap.add_argument("--csv", help="復調結果をCSVに保存")
+    ap.add_argument("--address", action="store_true",
+                    help="住所(市区町村)も表示 (国土地理院APIを使用)")
     args = ap.parse_args(argv)
 
     tmp = None
@@ -154,23 +156,30 @@ def main(argv: list[str] | None = None) -> int:
         if tmp:
             os.unlink(tmp)
     pipe = DecoderPipeline(fs, baud=args.baud, invert=args.invert)
+    geo = None
+    if args.address:
+        from .geocode import ReverseGeocoder
+        geo = ReverseGeocoder(min_interval_s=0.0)
 
     rows = []
     block = int(fs)  # 1秒ずつ処理
     for i in range(0, len(x), block):
         for pkt in pipe.process(x[i : i + block]):
             t = i / fs
+            addr = geo.lookup(pkt.lat_wgs84, pkt.lon_wgs84) if geo else None
+            addr_s = addr.text("town") if addr else ""
             print(
                 f"[{t:7.2f}s] ID={pkt.station_id} {pkt.fix_status_text} "
                 f"WGS84: {pkt.lat_wgs84:.6f}, {pkt.lon_wgs84:.6f} "
                 f"({deg_to_dms_str(pkt.lat_wgs84)} / {deg_to_dms_str(pkt.lon_wgs84)}) "
                 f"高度 {pkt.alt_m:.0f}m PDOP={pkt.pdop} 衛星={pkt.satellites}"
+                + (f" {addr_s}" if addr_s else "")
                 + ("" if pkt.in_range else " [有効範囲外]")
             )
             rows.append([f"{t:.2f}", pkt.station_id, pkt.fix_status,
                          f"{pkt.lat_wgs84:.6f}", f"{pkt.lon_wgs84:.6f}",
                          f"{pkt.lat_tokyo:.6f}", f"{pkt.lon_tokyo:.6f}",
-                         f"{pkt.alt_m:.0f}", pkt.pdop, pkt.satellites])
+                         f"{pkt.alt_m:.0f}", pkt.pdop, pkt.satellites, addr_s])
 
     s = pipe.stats
     print(f"--- 正常 {s['packets_ok']} / エラー {s['packets_error']} "
@@ -183,7 +192,8 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.csv, "w", newline="", encoding="utf-8-sig") as f:
             wr = csv.writer(f)
             wr.writerow(["time_s", "id", "fix_status", "lat_wgs84", "lon_wgs84",
-                         "lat_tokyo", "lon_tokyo", "alt_m", "pdop", "satellites"])
+                         "lat_tokyo", "lon_tokyo", "alt_m", "pdop", "satellites",
+                         "address"])
             wr.writerows(rows)
         print(f"CSV保存: {args.csv}", file=sys.stderr)
 
