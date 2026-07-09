@@ -50,8 +50,9 @@ fc.nodeX, fc.nodeY = 200, 50
 fc.par.framestart = True
 fc.text = (
     "# gps_decode を毎フレーム強制クック(遅延評価対策)\n"
+    "# force=True必須: 参照されないチェーンはdirty判定でも空振りするため\n"
     "def onFrameStart(frame):\n"
-    "    op('gps_decode').cook()\n"
+    "    op('gps_decode').cook(force=True)\n"
     "    return\n"
 )
 
