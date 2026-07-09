@@ -74,21 +74,24 @@ for f in ("Yu Gothic UI", "Yu Gothic", "BIZ UDPGothic", "Meiryo", "MS Gothic"):
 out = c.op("sdi_out") or c.create(videodeviceoutTOP, "sdi_out")
 out.nodeX, out.nodeY = 700, 200
 out.inputConnectors[0].connect(text)
-# 環境依存パラメータは候補名で設定を試み、失敗したら手動設定を案内
-for names, val in [
-    (("signalformat", "videoformat"), "1080i5994"),
-    (("keyer", "keyermode", "keying"), "external"),
+# Fill&Key出力: Output Pixel Format = 8-bit + 8-bit Key (Alpha)
+#   → SDI OUT 1本目=Fill(カラー)、2本目=Key(アルファ) の2系統出力になる
+# 環境依存パラメータは候補値で設定を試み、失敗したら手動設定を案内
+for name, vals in [
+    ("signalformat", ("1080i5994", "1080i59.94", "1080i2997")),
+    ("outputpixelformat", ("fixed8key8",)),
 ]:
     done = False
-    for n in names:
+    for v in vals:
         try:
-            setattr(out.par, n, val)
-            done = True
-            break
+            setattr(out.par, name, v)
+            if out.par[name] is not None:
+                done = True
+                break
         except Exception:
             pass
     if not done:
-        print(f"sdi_out: {names} は手動で設定してください (値: {val})")
+        print(f"sdi_out: {name} は手動で設定してください (候補値: {vals})")
 
 # --- toxファイルとして保存(以後はこのtoxをドラッグ&ドロップで再利用可能) ---
 tox_path = os.path.join(HELI_GPS_LIB, "touchdesigner", "HELI_GPS.tox")

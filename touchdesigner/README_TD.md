@@ -130,18 +130,37 @@ exec(open(r"C:\heli_gps\touchdesigner\build_network.py", encoding="utf-8").read(
 
 ### 3-4. sdi_out (Video Device Out TOP) — 1080i Fill&Key出力
 
-1. `sdi_out` を選択 → `p`
-2. **Device**: UltraStudio を選択
-3. **Signal Format**: **1080i59.94** を選択
-4. **Keyer**(TDのバージョンにより「Keyer」「Keying」表記): **External** を選択
-   - これで **SDI OUT A=Fill、SDI OUT B=Key** の2系統が出ます
-   - スイッチャーのDSKにFill/Keyとして入力してください
-5. あわせてWindows側の **Blackmagic Desktop Video Setup** を開き、
-   出力コネクタ設定がSDI、キーヤーを使う設定になっていることを確認
+`sdi_out` を選択 → `p` でパラメータ画面を開き、上から順に:
 
-> **スイッチャーを使わず、UltraStudioだけで本線に重ねたい場合**:
-> Keyerを **Internal** にすると、SDI INの本線映像に文字を直接載せた
-> 合成済み映像がSDI OUTから出ます(DSK不要の簡易構成)。
+1. **Library**: Blackmagic を選択(メーカー選択がある場合)
+2. **Device**: UltraStudio を選択
+3. **Signal Format**: **1080i 59.94** を選択
+   (インターレースはフィールド周波数表記のため、リストでは
+   「1080i」の59.94を選びます。「1080i 29.97」表記のビルドもあります)
+4. **Output Pixel Format**: **「8-bit + 8-bit Key (Alpha)」** を選択
+   ← **これがFill&Key設定です。「Keyer」という名前のパラメータはありません**
+   - この設定にすると、UltraStudioの **SDI OUT 1本目=Fill(カラー)、
+     2本目=Key(アルファ)** の2系統出力になります
+   - 2本をスイッチャーのDSKにFill/Keyとして入力してください
+5. **Active**: On
+
+> **重要 — リファレンス(ゲンロック)が必要です**: BlackmagicデバイスのKey/Fill
+> 出力は、**REF INに同期信号(ブラックバーストまたは3値シンク)を接続**
+> しないと機能しない機種がほとんどです。局内のステーションシンクを
+> UltraStudioのREF INに入れてください(スイッチャーと同期も取れるので
+> DSK運用上もこれが正解です)。
+>
+> 万一「8-bit + 8-bit Key (Alpha)」がリストに出ない場合は、
+> Desktop Videoのバージョンを最新(12.x以降)に更新してください。
+
+**文字のフチが黒ずむ場合**: DSK側の設定を「プリマルチプライ(乗算済み)」に
+合わせるか、TD側で overlay_text と sdi_out の間に挟んだ合成の
+プリマルチプライ設定を切り替えてください。
+
+> **スイッチャーを使わない簡易構成**: UltraStudio/DeckLinkにはハードウェア
+> キーヤー(SDI INの本線に直接文字を重ねて合成済みで出す機能)を持つ機種も
+> ありますが、TDのVideo Device Out TOPからは制御できません。本構成では
+> スイッチャーDSK(またはキーヤー付きの後段機器)で重ねてください。
 
 ### 3-5. プロジェクトのFPSを59.94にする
 
@@ -196,7 +215,8 @@ project.cookRate = 59.94
 | latが0のまま | 音声が来ていない。audio_inのDevice/波形を確認 |
 | 住所だけ出ない(latは出る) | インターネット接続を確認(APIに出られていない) |
 | SDI出力が真っ黒 | sdi_outのSignal Formatが受け側と一致しているか確認 |
-| Keyが全白/全黒 | overlay_textのBackground Alphaが0か、KeyerがExternalか確認 |
+| Keyが出ない/2本目から何も出ない | Output Pixel Formatが「8-bit + 8-bit Key (Alpha)」か、**REF INに同期信号が入っているか**確認 |
+| Keyが全白/全黒 | overlay_textのBackground Alphaが0になっているか確認 |
 | 出力がカクつく | project.cookRate=59.94か、PCのGPU負荷を確認 |
 | 1920x1080にできない | ライセンスがNon-Commercial(1280制限)。Commercialが必要 |
 
