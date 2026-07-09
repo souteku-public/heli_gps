@@ -90,18 +90,20 @@ def onCook(scriptOp):
 
     pkt = _state["last_pkt"]
     age = time.monotonic() - _state["last_time"] if pkt else 1e9
-    stale = age > float(scriptOp.par.Staletimeout.eval())
+    # パラメータ未設定(空/0)でも動くよう安全な既定値でフォールバック
+    stale_to = float(scriptOp.par.Staletimeout.eval() or 5.0)
+    stale = age > stale_to
 
     # --- Text TOP更新 ---
-    top_name = scriptOp.par.Texttop.eval()
+    top_name = scriptOp.par.Texttop.eval() or "overlay_text"
     top = scriptOp.parent().op(top_name) or op(top_name)
     if top is not None:
         if pkt is None or stale:
             text = scriptOp.par.Staletext.eval()
         else:
             addr = _state["geo"].current
-            addr_s = addr.text(scriptOp.par.Addrlevel.eval()) if addr else ""
-            text = scriptOp.par.Textformat.eval().format(
+            addr_s = addr.text(scriptOp.par.Addrlevel.eval() or "city") if addr else ""
+            text = (scriptOp.par.Textformat.eval() or "{address}").format(
                 address=addr_s,
                 alt=f"{pkt.alt_m:.0f}",
                 lat=f"{pkt.lat_wgs84:.5f}",

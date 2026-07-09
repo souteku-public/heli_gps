@@ -121,18 +121,54 @@ if not _try(out, "signalformat", "1080i5994", "1080i59.94", "1080i2997"):
 if not _try(out, "outputpixelformat", "fixed8key8"):
     print("sdi_out: Output Pixel Format を手動で「8-bit + 8-bit Key」に設定してください")
 
-# --- gps_decodeのカスタムパラメータを生成(Setup Parameters相当) ---
-# Script CHOPはコールバックのonSetupParametersを実行させるとカスタムPが出る
-try:
-    dec.par.setuppars.pulse()   # ビルドにより名称差異あり
-except Exception:
-    print("gps_decode: パラメータ画面のScriptタブで Setup Parameters を1回押してください")
+# --- gps_decodeのカスタムパラメータを生成(Setup Parameters相当)し値も設定 ---
+# Script CHOPはコールバックのonSetupParametersを実行させるとカスタムPが出る。
+# ビルドによりpulse名が異なる/効かないことがあるため複数試す。
+for pname in ("setuppars", "setupparameters"):
+    try:
+        getattr(dec.par, pname).pulse()
+        break
+    except Exception:
+        pass
 
-# GPS音声チャンネル既定(0始まり。EMBのCH3ならindex=2)
-try:
-    dec.par.Audiochan = 2
-except Exception:
-    pass
+# カスタムパラメータの値を明示設定(Setup直後は既定が入らないことがあるため)。
+# パラメータがまだ無い場合はrun遅延で後から入れる。
+def _set_decode_pars():
+    d = op(dec.path)
+    vals = {
+        "Baud": "1200",
+        "Audiochan": 2,          # EMBのCH3(0始まりで2)
+        "Texttop": "overlay_text",
+        "Textformat": "{address}",
+        "Staletext": "",
+        "Staletimeout": 5,
+        "Addrlevel": "city",
+        "Geomode": "offline",
+    }
+    ok = True
+    for k, v in vals.items():
+        try:
+            setattr(d.par, k, v)
+        except Exception:
+            ok = False
+    return ok
+
+
+if not _set_decode_pars():
+    # パラメータ未生成なら次フレームで再試行(Setup Parametersの反映待ち)
+    run("op('" + dec.path + "').parent().op('_setpars_once').run()", delayFrames=5)
+    tmp = c.create(textDAT, "_setpars_once")
+    tmp.text = (
+        "def run():\n"
+        "    d = op('" + dec.path + "')\n"
+        "    for k,v in {'Baud':'1200','Audiochan':2,'Texttop':'overlay_text',"
+        "'Textformat':'{address}','Staletext':'','Staletimeout':5,"
+        "'Addrlevel':'city','Geomode':'offline'}.items():\n"
+        "        try: setattr(d.par,k,v)\n"
+        "        except: pass\n"
+        "    op('" + dec.path + "').parent().op('_setpars_once').destroy()\n"
+    )
+    print("gps_decode: カスタムパラメータを遅延設定します(Setup Parameters反映待ち)")
 
 # --- toxとして保存(以後はこのtoxをドラッグ&ドロップで再利用可能) ---
 tox_path = os.path.join(HELI_GPS_LIB, "touchdesigner", "HELI_GPS.tox")
