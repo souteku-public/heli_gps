@@ -48,6 +48,12 @@ def onSetupParameters(scriptOp):
     p[0].menuNames = ["pref", "city", "town"]
     p[0].menuLabels = ["都道府県", "市区町村", "町丁目"]
     p[0].default = "city"
+    p = page.appendMenu("Geomode", label="住所変換エンジン")
+    p[0].menuNames = ["offline", "auto", "online"]
+    p[0].menuLabels = ["オフライン(ネット不要・市区町村まで)",
+                       "自動(ネット時のみ町丁目補完)",
+                       "オンライン(地理院API)"]
+    p[0].default = "offline"
     return
 
 
@@ -58,8 +64,10 @@ def _ensure_pipeline(scriptOp, rate):
         _state["pipe"] = DecoderPipeline(rate, baud=baud)
         _state["rate"] = rate
         _state["baud"] = baud
-    if _state["geo"] is None:
-        _state["geo"] = AsyncReverseGeocoder()
+    mode = scriptOp.par.Geomode.eval() if hasattr(scriptOp.par, "Geomode") else "offline"
+    if _state["geo"] is None or _state.get("geomode") != mode:
+        _state["geo"] = AsyncReverseGeocoder(mode=mode)
+        _state["geomode"] = mode
 
 
 def onCook(scriptOp):

@@ -132,7 +132,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--invert", action="store_true", help="マーク/スペース反転")
     ap.add_argument("--csv", help="復調結果をCSVに保存")
     ap.add_argument("--address", action="store_true",
-                    help="住所(市区町村)も表示 (国土地理院APIを使用)")
+                    help="住所(市区町村)も表示 (同梱データでオフライン判定)")
+    ap.add_argument("--address-online", action="store_true",
+                    help="住所を町丁目まで表示 (国土地理院APIを使用)")
     args = ap.parse_args(argv)
 
     tmp = None
@@ -157,9 +159,10 @@ def main(argv: list[str] | None = None) -> int:
             os.unlink(tmp)
     pipe = DecoderPipeline(fs, baud=args.baud, invert=args.invert)
     geo = None
-    if args.address:
+    if args.address or args.address_online:
         from .geocode import ReverseGeocoder
-        geo = ReverseGeocoder(min_interval_s=0.0)
+        geo = ReverseGeocoder(min_interval_s=0.0,
+                              mode="auto" if args.address_online else "offline")
 
     rows = []
     block = int(fs)  # 1秒ずつ処理

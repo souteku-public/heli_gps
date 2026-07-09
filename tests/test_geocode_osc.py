@@ -35,7 +35,7 @@ def test_lookup_with_mocked_api(monkeypatch):
         ).encode())
 
     monkeypatch.setattr(geocode.urllib.request, "urlopen", fake_urlopen)
-    geo = ReverseGeocoder(min_interval_s=0.0, min_move_m=150.0)
+    geo = ReverseGeocoder(min_interval_s=0.0, min_move_m=150.0, mode="online")
     a = geo.lookup(35.6624, 140.0384)
     assert a.text("city") == "千葉県千葉市美浜区"
     # 150m未満の移動では再問い合わせしない
@@ -56,13 +56,44 @@ def test_lookup_network_error_keeps_last(monkeypatch):
             {"results": {"muniCd": "13101", "lv01Nm": ""}}).encode())
 
     monkeypatch.setattr(geocode.urllib.request, "urlopen", fake_urlopen)
-    geo = ReverseGeocoder(min_interval_s=0.0, min_move_m=0.0)
+    geo = ReverseGeocoder(min_interval_s=0.0, min_move_m=0.0, mode="online")
     a1 = geo.lookup(35.68, 139.75)
     assert a1.city == "千代田区"
     ok["flag"] = False
     a2 = geo.lookup(36.00, 140.00)   # 通信断 → 前回値保持
     assert a2.city == "千代田区"
     assert geo.error_count == 1
+
+
+def test_offline_lookup_known_points():
+    """同梱境界データによるオフライン判定(ネットワーク不要)."""
+    geo = ReverseGeocoder(mode="offline", min_interval_s=0.0, min_move_m=0.0)
+    cases = [
+        (35.6624, 140.0384, "千葉市美浜区"),   # 実収録データの開始点
+        (35.681111, 139.767, "千代田区"),      # 東京駅
+        (43.0621, 141.3544, "札幌市中央区"),
+        (34.7108, 137.7261, "浜松市中央区"),   # 2024年再編後の新区名
+        (26.2124, 127.6809, "那覇市"),
+    ]
+    for lat, lon, city in cases:
+        a = geo.lookup(lat, lon, force=True)
+        assert a is not None and a.city == city, (lat, lon, a)
+
+    # 海上は判定なし → 前回値を保持
+    before = geo.current
+    a = geo.lookup(39.0, 143.5, force=True)
+    assert a == before
+
+
+def test_offline_no_network_access(monkeypatch):
+    """offlineモードではAPIに一切アクセスしないこと."""
+    def boom(*a, **k):
+        raise AssertionError("offlineモードでAPIが呼ばれた")
+    monkeypatch.setattr(geocode.urllib.request, "urlopen", boom)
+    geo = ReverseGeocoder(mode="offline", min_interval_s=0.0, min_move_m=0.0)
+    a = geo.lookup(35.681111, 139.767, force=True)
+    assert a.city == "千代田区"
+    assert geo.error_count == 0
 
 
 def test_osc_message_encoding():

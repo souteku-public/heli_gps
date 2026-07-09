@@ -87,7 +87,7 @@ class DecoderApp:
         ttk.Checkbutton(cfg, text="CSVログ保存", variable=self.csv_var).grid(
             row=2, column=3, sticky="w", **pad)
         self.geo_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(cfg, text="住所変換 (国土地理院API)",
+        ttk.Checkbutton(cfg, text="住所変換 (オフライン・ネット不要)",
                         variable=self.geo_var).grid(row=3, column=1, columnspan=2, sticky="w", **pad)
         self.osc_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(cfg, text="OSC送出 (TD連携 127.0.0.1:9000)",
