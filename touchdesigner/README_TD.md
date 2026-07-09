@@ -138,9 +138,43 @@ exec(open(r"C:\heli_gps\touchdesigner\build_network.py", encoding="utf-8").read(
 3. 正しく設定できていれば、ノードのビューアに `lat / lon / alt / fix / age` の
    チャンネルが出て、latが35.6…などの値になります(fix=0が正常受信)
 
-### 3-3. overlay_text (Text TOP) — テロップの見た目(ここがUI調整箇所)
+### 3-3. コントロールUI(★オペレーターはここだけ操作すればOK)
 
-`overlay_text` を選択 → `p` で、**放送で使う文字の調整はすべてここ**です:
+`build_network.py` を実行すると、**HELI_GPSコンテナに「Controls」という
+操作パネル(カスタムパラメータページ)が自動生成**されます。運用で触る
+項目がすべて1画面に集約されており、ご要望の
+「オンライン/オフライン・住所の粒度・フォント・文字サイズ・配置」を
+ここから設定できます。
+
+**開き方**: ネットワーク画面で `HELI_GPS` の**箱を1回クリックで選択**し
+(中に入らない)、`p` を押す → **「Controls」タブ**。
+
+| 項目 | 内容 |
+|---|---|
+| 住所変換モード | **オフライン(ネット不要) / 自動 / オンライン(地理院API)** |
+| 住所の粒度 | **都道府県 / 市区町村 / 町丁目** |
+| 表示書式 | `{address}` / `{address} 高度{alt}m` 等 |
+| 受信途絶時の表示 | 空欄=消す / 任意文字 |
+| GPS音声ch(0始まり) | CH3なら 2 |
+| ビットレート | 1200 / 2400 |
+| **フォント** | インストール済み日本語フォントから選択 |
+| **文字サイズ** | スライダー |
+| 横位置基準 / 縦位置基準 | 左中右 / 下中上 |
+| **位置(X,Y)px** | セーフエリア内へ微調整 |
+| 文字色 / 不透明度 | カラーピッカー |
+
+変更は overlay_text と gps_decode に**即座に反映**されます(内部で
+パラメータバインド)。本番中もこのページだけ操作すれば完結します。
+
+> 既存ネットワークへ後付けする場合はTextportで:
+> ```python
+> exec(open(r"C:\heli_gps\touchdesigner\setup_ui.py", encoding="utf-8").read())
+> ```
+
+### 3-4. overlay_text (Text TOP) — 個別に細かく詰めたい場合
+
+通常はコントロールUI(3-3)で足りますが、フチ取りや座布団など
+細かい調整をしたいときは `overlay_text` を選択 → `p` で直接調整します:
 
 | パラメータ | 内容 |
 |---|---|
@@ -156,7 +190,7 @@ exec(open(r"C:\heli_gps\touchdesigner\build_network.py", encoding="utf-8").read(
 - 縁取りや座布団が必要になったら: Rectangle TOP + Over TOP を
   overlay_text と sdi_out の間に挟みます(必要なら手順を案内します)
 
-### 3-4. sdi_out (Video Device Out TOP) — 1080i Fill&Key出力
+### 3-5. sdi_out (Video Device Out TOP) — 1080i Fill&Key出力
 
 `sdi_out` を選択 → `p` でパラメータ画面を開き、上から順に:
 
@@ -190,7 +224,7 @@ exec(open(r"C:\heli_gps\touchdesigner\build_network.py", encoding="utf-8").read(
 > ありますが、TDのVideo Device Out TOPからは制御できません。本構成では
 > スイッチャーDSK(またはキーヤー付きの後段機器)で重ねてください。
 
-### 3-5. プロジェクトのFPSを59.94にする
+### 3-6. プロジェクトのFPSを59.94にする
 
 Textport(Alt+T)で:
 

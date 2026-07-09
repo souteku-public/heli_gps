@@ -170,6 +170,20 @@ if not _set_decode_pars():
     )
     print("gps_decode: カスタムパラメータを遅延設定します(Setup Parameters反映待ち)")
 
+# --- コントロールUI(Controlsページ)を構築 ---
+# HELI_GPSコンテナに操作用カスタムパラメータを追加し、
+# gps_decode/overlay_text をバインドする。
+try:
+    ui_path = os.path.join(HELI_GPS_LIB, "touchdesigner", "setup_ui.py")
+    with open(ui_path, encoding="utf-8") as f:
+        ui_src = f.read()
+    # 末尾の自動実行(setup_ui())を外し、TDグローバルが解決する現在の
+    # 名前空間へ関数を定義してから、当コンテナを引数に呼ぶ
+    exec(ui_src.replace("\nsetup_ui()\n", "\n"), globals())
+    setup_ui(c)
+except Exception as e:
+    print(f"コントロールUIの構築をスキップ(手動でsetup_ui.pyを実行してください): {e}")
+
 # --- toxとして保存(以後はこのtoxをドラッグ&ドロップで再利用可能) ---
 tox_path = os.path.join(HELI_GPS_LIB, "touchdesigner", "HELI_GPS.tox")
 try:
