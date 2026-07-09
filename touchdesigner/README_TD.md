@@ -238,6 +238,8 @@ project.cookRate = 59.94
 
 | 症状 | 対処 |
 |---|---|
+| テキストが「ヘリGPS待機中」のまま変わらない(latは出ている) | gps_decodeのカスタムパラメータが空。Textportで直接設定: `d=op('/project1/HELI_GPS/gps_decode'); d.par.Texttop='overlay_text'; d.par.Textformat='{address}'; d.par.Staletimeout=5; d.par.Addrlevel='city'; d.par.Geomode='offline'; d.par.Audiochan=2` |
+| CHOPのfixが常に2 (パケットは正常) | 同上。Staletimeoutが0だと常に受信途絶扱いになりfix=2で出る。上記でStaletimeout=5を設定 |
 | テキストが初期表示のまま一切変わらない | `force_cook`(Execute DAT)があるか確認。無ければbuild_network.pyを再実行(TDは参照されないノードを評価しないため、gps_decodeの強制クックが必要) |
 | 文字が「□□□」になる | overlay_textのFontを日本語フォント(Yu Gothic等)に |
 | 住所が出ない/更新されない | gps_decodeビューアのfixが0か確認。0でなければ音声チャンネル番号を順に変更 |
