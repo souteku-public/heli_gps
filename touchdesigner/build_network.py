@@ -25,6 +25,10 @@ c = root.op("HELI_GPS") or root.create(containerCOMP, "HELI_GPS")
 # --- 音声入力 ---
 audio = c.op("audio_in") or c.create(audiodeviceinCHOP, "audio_in")
 audio.nodeX, audio.nodeY = 0, 200
+try:
+    audio.par.active = True
+except Exception:
+    pass
 
 # --- 復調Script CHOP + コールバック ---
 cb = c.op("gps_decode_callbacks") or c.create(textDAT, "gps_decode_callbacks")
@@ -57,6 +61,14 @@ for name, val in [
         setattr(text.par, name, val)
     except Exception as e:
         print(f"overlay_text.{name} 設定スキップ: {e}")
+# 日本語フォント(入っているものを順に試す)
+for f in ("Yu Gothic UI", "Yu Gothic", "BIZ UDPGothic", "Meiryo", "MS Gothic"):
+    try:
+        text.par.font = f
+        if text.par.font.eval() == f:
+            break
+    except Exception:
+        pass
 
 # --- SDI出力 (Fill & Key) ---
 out = c.op("sdi_out") or c.create(videodeviceoutTOP, "sdi_out")
@@ -77,6 +89,14 @@ for names, val in [
             pass
     if not done:
         print(f"sdi_out: {names} は手動で設定してください (値: {val})")
+
+# --- toxファイルとして保存(以後はこのtoxをドラッグ&ドロップで再利用可能) ---
+tox_path = os.path.join(HELI_GPS_LIB, "touchdesigner", "HELI_GPS.tox")
+try:
+    c.save(tox_path)
+    print(f"toxを保存しました: {tox_path}")
+except Exception as e:
+    print(f"tox保存に失敗(手動で保存してください): {e}")
 
 print("HELI_GPS ネットワークを構築しました。README_TD.md の手順で"
       "デバイス選択とキーヤー設定を行ってください。")

@@ -1,112 +1,209 @@
-# TouchDesigner連携ガイド — SDI入力からGPS住所テロップをFill&Keyで出力
+# TouchDesigner設定ガイド — SDI入力からGPS住所テロップをFill&Keyで出力
 
-UltraStudioのSDI入力(EMB音声ch3)からGPSを復調し、市区町村の住所文字列を
-1080iのFill(文字)+Key(アルファ)としてUltraStudioのSDI OUTから出力する構成です。
+**TouchDesignerを初めて使う方向け**に、ゼロから本番運用までの手順を説明します。
+
+## 全体の構成
 
 ```
-SDI IN → UltraStudio → TD: Audio Device In (EMB ch3)
-                            → Script CHOP (nnn_decoder復調+住所変換)
-                            → Text TOP (フォント/サイズ/位置をUIで調整)
-                            → Video Device Out (1080i59.94, External Keyer)
-                                  → SDI OUT A = Fill / SDI OUT B = Key → スイッチャーDSKへ
+SDI IN → UltraStudio → TD: audio_in (EMB音声ch3を取得)
+                            → gps_decode (GPS復調+市区町村変換)
+                            → overlay_text (テロップ描画。フォント/位置はここでUI調整)
+                            → sdi_out (1080i59.94, External Keyer)
+                                → SDI OUT A = Fill / SDI OUT B = Key → スイッチャーDSKへ
 ```
 
-映像そのものはTDを通さず、スイッチャー(DSK/キーヤー)側で
-Fill&Keyを本線に重ねる運用を想定しています。
+映像本線はTDを通しません。TDは「文字のFillとKeyの2系統」だけを出し、
+スイッチャーのDSK/キーヤーで本線に重ねる運用です。
 
-## 事前準備
+## toxファイルについて
 
-1. **Blackmagic Desktop Video** を最新版にインストール
-2. **リポジトリの配置**: この`heli_gps`一式を例えば `C:\heli_gps` に置く
-3. **TDのPythonにnumpyを確認**: TD標準Pythonにはnumpy同梱済み。
-   追加パッケージは不要です(復調・住所変換は標準ライブラリ+numpyのみ)
-4. `touchdesigner/gps_decode_callbacks.py` と `build_network.py` の冒頭にある
-   `HELI_GPS_LIB = r"C:\heli_gps"` を実際の配置場所に合わせる
+toxはTouchDesigner本体でしか生成できないため、リポジトリには
+**実行するとtoxを自動生成するスクリプト**(`build_network.py`)を入れてあります。
+手順2を1回実行すると `touchdesigner/HELI_GPS.tox` が保存され、
+**以後は新しいプロジェクトにこのtoxをドラッグ&ドロップするだけ**で使えます。
 
-## セットアップ (方式A: TD内で復調)
+---
 
-1. TDで新規プロジェクトを開き、Textport(Alt+T)で実行:
-   ```python
-   exec(open(r"C:\heli_gps\touchdesigner\build_network.py", encoding="utf-8").read())
+## 0. 必要なもの
+
+| 項目 | 内容 |
+|---|---|
+| TouchDesigner | **Commercialライセンス以上が必須**(下記注意) |
+| Blackmagic Desktop Video | 最新版をインストール(UltraStudioのドライバ) |
+| このリポジトリ | 例: `C:\heli_gps` に配置 |
+| インターネット接続 | 住所変換(国土地理院API)に使用 |
+
+> **ライセンスの注意**: 無償のNon-Commercial版は**解像度が1280×1280に制限**
+> されるため、1920×1080のテロップ出力ができません。放送業務での使用となるため
+> **Commercial**(年$600)以上のライセンスを購入してください。
+> 事前検証だけなら無償版でも「1280×720に落とした構成」で流れの確認は可能です。
+
+## 1. インストールと起動
+
+1. https://derivative.ca/download から**Windows版インストーラ**を取得しインストール
+2. 起動時にアカウント作成とライセンスキーの有効化を求められるので画面に従う
+3. 起動すると英語UIでサンプルネットワークが表示されます
+4. **File → New** で新規プロジェクトを作成し、**File → Save** で
+   `C:\heli_gps\touchdesigner\heli_telop.toe` などの名前で保存
+   (.toeが「プロジェクトファイル」、.toxは「部品ファイル」です)
+
+### TouchDesignerの基本操作(最低限これだけ)
+
+| 操作 | 方法 |
+|---|---|
+| 画面の移動/拡大 | 右ドラッグ / ホイール |
+| ノードの選択 | 左クリック |
+| パラメータ画面を出す | ノードを選んで **キーボードの `p`** |
+| ノードの中身(ビューア)を大きく見る | ノード上でホイールクリック→ビューア表示 |
+| Textport(コマンド入力画面) | **Alt + T** |
+| 編集画面⇔本番画面(Perform Mode) | **F1**(戻るのはEsc) |
+
+## 2. ネットワークの自動構築(tox生成)
+
+1. `build_network.py` と `gps_decode_callbacks.py` をメモ帳で開き、先頭の
+   `HELI_GPS_LIB = r"C:\heli_gps"` を実際の配置場所に合わせて保存
+2. TDで **Alt+T** を押してTextportを開き、次の1行を貼り付けてEnter:
+
+```python
+exec(open(r"C:\heli_gps\touchdesigner\build_network.py", encoding="utf-8").read())
+```
+
+3. `/project1/HELI_GPS` の中に4つのノード(audio_in → gps_decode → overlay_text → sdi_out)
+   が生成され、`HELI_GPS.tox` が自動保存されます
+4. ネットワーク画面の何もない所をダブルクリックすると階層を移動できます。
+   `HELI_GPS` と書かれた箱をダブルクリックして中に入ってください
+
+> 以後、別のプロジェクトで使うときは、エクスプローラから `HELI_GPS.tox` を
+> TDのネットワーク画面にドラッグ&ドロップするだけです。
+
+## 3. 各ノードの設定
+
+### 3-1. audio_in (Audio Device In CHOP) — UltraStudioの音声を取る
+
+1. `audio_in` を左クリック → `p` でパラメータ画面
+2. **Driver** と **Device** のプルダウンから **Blackmagic / UltraStudio** を選択
+3. **Sample Rate** が 48000 になっていることを確認
+4. ノードのビューアに波形が並びます。EMB音声の各chが `chan1, chan2, ...` として
+   見えるので、**GPSが乗っているチャンネルを確認**します:
+   - GPSチャンネルは**常時ビーッと鳴っている1200Hz系のトーン**なので、
+     波形が常に密に振れているチャンネルがそれです(今回の収録ではch3=chan3)
+   - 見分けがつかない場合は、次の3-2で「音声チャンネル」を0,1,2,...と
+     順に変えて、住所が表示される番号を探すのが確実です
+
+> **DeviceにBlackmagicが出てこない場合** → ページ末尾の「方式B: OSC受信」へ。
+> テロップ出力側の構成はそのまま使えます。
+
+### 3-2. gps_decode (Script CHOP) — 復調と住所変換
+
+1. `gps_decode` を選択 → `p` → **「Heli GPS」タブ**(カスタムパラメータ)
+2. 設定項目:
+
+| パラメータ | 設定値 |
+|---|---|
+| ビットレート | **1200 bps**(実収録で確認済み) |
+| 音声チャンネル(0始まり) | GPSのch。**SDIのCH3なら「2」**(0始まりのため) |
+| 更新するText TOP | overlay_text(既定のまま) |
+| 表示フォーマット | `{address}` (例: `{address} 高度{alt}m` も可) |
+| 受信途絶時の表示 | 空欄=テロップを消す / `GPS受信なし` など任意 |
+| 住所の詳細度 | **市区町村** |
+
+3. 正しく設定できていれば、ノードのビューアに `lat / lon / alt / fix / age` の
+   チャンネルが出て、latが35.6…などの値になります(fix=0が正常受信)
+
+### 3-3. overlay_text (Text TOP) — テロップの見た目(ここがUI調整箇所)
+
+`overlay_text` を選択 → `p` で、**放送で使う文字の調整はすべてここ**です:
+
+| パラメータ | 内容 |
+|---|---|
+| Font | フォント選択(游ゴシック=Yu Gothic 等。自動設定済み、変更可) |
+| Font Size X | 文字サイズ(初期値72) |
+| Align X / Align Y | 画面内の基準位置(中央/左右、上下) |
+| Position X / Y | 位置の微調整(ピクセル)。初期値は下センターのセーフエリア内 |
+| Font Color / Alpha | 文字色・不透明度 |
+| Border系 | フチ付き文字にする場合 |
+
+- **背景(Background Alpha)は0のまま**にしてください。この透明部分が
+  そのままKey(アルファ)になります
+- 縁取りや座布団が必要になったら: Rectangle TOP + Over TOP を
+  overlay_text と sdi_out の間に挟みます(必要なら手順を案内します)
+
+### 3-4. sdi_out (Video Device Out TOP) — 1080i Fill&Key出力
+
+1. `sdi_out` を選択 → `p`
+2. **Device**: UltraStudio を選択
+3. **Signal Format**: **1080i59.94** を選択
+4. **Keyer**(TDのバージョンにより「Keyer」「Keying」表記): **External** を選択
+   - これで **SDI OUT A=Fill、SDI OUT B=Key** の2系統が出ます
+   - スイッチャーのDSKにFill/Keyとして入力してください
+5. あわせてWindows側の **Blackmagic Desktop Video Setup** を開き、
+   出力コネクタ設定がSDI、キーヤーを使う設定になっていることを確認
+
+> **スイッチャーを使わず、UltraStudioだけで本線に重ねたい場合**:
+> Keyerを **Internal** にすると、SDI INの本線映像に文字を直接載せた
+> 合成済み映像がSDI OUTから出ます(DSK不要の簡易構成)。
+
+### 3-5. プロジェクトのFPSを59.94にする
+
+Textport(Alt+T)で:
+
+```python
+project.cookRate = 59.94
+```
+
+を実行(1080i59.94のフィールド周期に合わせます)。File → Saveで保存。
+
+## 4. 動作確認(ヘリなしでできます)
+
+1. コマンドプロンプトで模擬GPS音声を生成:
    ```
-   `/project1/HELI_GPS` に雛形ネットワークができます。
+   cd C:\heli_gps
+   python -m nnn_decoder.modulator test.wav --seconds 60
+   ```
+2. `test.wav` を再生し、その音をaudio_inに入れる
+   (いちばん簡単なのは、audio_inのDeviceを一時的にPCのマイク/ライン入力や
+   ステレオミキサーにして、スピーカー再生をループバックする方法)
+3. `overlay_text` のビューアに **「千葉県千葉市美浜区」** と表示され、
+   毎秒更新されれば復調〜住所変換まで動いています
+4. UltraStudioのSDI OUTをモニタ/スイッチャーで確認
 
-2. **audio_in (Audio Device In CHOP)** のパラメータ:
-   - Driver / Device: UltraStudio (Blackmagic) を選択
-   - Sample Rate: 48000
-   - EMB音声のch3が何番目のチャンネルに来るかを確認
-     (`audio_in` の出力チャンネルをMIDIっぽく見て、1200Hzのトーンが
-     見えるチャンネルがGPSです)
-   - ※Audio Device In CHOPにBlackmagicデバイスが出ない場合は
-     後述の「方式B: OSC受信」を使ってください
+## 5. 本番運用
 
-3. **gps_decode (Script CHOP)** のカスタムパラメータ(Heli GPSページ):
-   - ビットレート: 1200 (実測確認済みの値)
-   - 音声チャンネル: audio_in内でGPSが乗っているチャンネル番号(0始まり)
-   - 表示フォーマット: `{address}` のほか `{address} 高度{alt}m` など
-     `{lat} {lon} {sats}` が使用可能
-   - 住所の詳細度: 市区町村 (町丁目まで出す場合は「町丁目」)
-   - 受信途絶時の表示: 空欄なら非表示(テロップが消える)
+- **F1キー**でPerform Mode(本番画面)へ。編集画面に戻るのはEsc
+- 運用PCでは .toe をダブルクリックすれば同じ状態で立ち上がります
+- Windowsのスリープ/自動更新の無効化、TDの自動起動(スタートアップに.toe)を推奨
 
-4. **overlay_text (Text TOP)** — テロップの見た目はここでUI調整:
-   - Font: 游ゴシック / Noto Sans JP など日本語フォントを選択
-   - Font Size, Position, Align で位置・サイズ調整
-   - 背景アルファ0(透明)のまま使うこと(アルファがそのままKeyになります)
-   - 座布団(半透明ボックス)が欲しい場合はRectangle TOPとOver TOPで
-     overlay_textの手前に合成してからsdi_outへ
-
-5. **sdi_out (Video Device Out TOP)**:
-   - Device: UltraStudio を選択
-   - Signal Format: **1080i59.94** (放送系に合わせる)
-   - **Keyer: External** に設定
-     → SDI OUT A からFill、SDI OUT B からKeyが出ます
-   - TDが出すのはRGBA1枚で、Fill/Key分離はUltraStudio側が行います
-
-6. プロジェクトFPSを59.94に (File > Project Settings > FPS)。
-   テキスト主体なのでインターレースのちらつきが気になる場合は
-   文字サイズを大きめに、細い明朝体を避けるのが定石です。
-
-## 方式B: 外部デコード + OSC受信 (音声デバイスが見えない場合の代替)
-
-UltraStudioの音声がTDから取れない環境では、復調を外部アプリで行い
-TDへはOSCで住所文字列だけを渡します。
+## 方式B: 外部デコード + OSC受信(TDでBlackmagic音声が取れない場合)
 
 1. PC側でGUIアプリを起動し「OSC送出 (127.0.0.1:9000)」をON:
    ```
    python -m nnn_decoder.app
    ```
-   (音声入力はWindowsに見えている任意の経路でOK。UltraStudioの音声が
-   Windows録音デバイスに出ていればそれを選択)
+   (音声はWindowsに見えている任意の入力経路でOK)
+2. TD側: ネットワークの空きスペースをダブルクリック → OPメニューから
+   **DAT → OSC In** を作成。パラメータで Port=9000
+3. **DAT → Text** を作成し、`osc_in_callbacks.py` の内容を貼り付け、
+   名前を `osc_in_callbacks` に変更
+4. OSC In DATのパラメータ **Callbacks** に `osc_in_callbacks` と入力
+5. 以降(overlay_text, sdi_out)は方式Aと同じ
 
-2. TD側: OSC In DAT を作成、Port=9000。
-   `touchdesigner/osc_in_callbacks.py` の内容をコールバックDATに貼り、
-   OSC In DATのCallbacksに指定。`TEXT_TOP`の名前を合わせる。
+## トラブルシューティング
 
-3. Text TOP以降(手順4〜6)は方式Aと同じ。
-
-OSCは `/heli/position (lat,lon,alt)` `/heli/address (文字列)`
-`/heli/status (fix,衛星数,ID)` を毎秒送出しているので、
-高度表示や位置に応じた演出もTD側で自由に組めます。
-
-## 動作確認 (実機・ヘリなしで)
-
-テスト音声を再生してループバックすれば全経路を確認できます:
-
-```
-python -m nnn_decoder.modulator test.wav --seconds 60
-```
-
-これを再生した音声をaudio_in(または外部アプリ)に入れると、
-「千葉県千葉市美浜区」付近を南下する模擬データが毎秒更新されます。
+| 症状 | 対処 |
+|---|---|
+| 文字が「□□□」になる | overlay_textのFontを日本語フォント(Yu Gothic等)に |
+| 住所が出ない/更新されない | gps_decodeビューアのfixが0か確認。0でなければ音声チャンネル番号を順に変更 |
+| latが0のまま | 音声が来ていない。audio_inのDevice/波形を確認 |
+| 住所だけ出ない(latは出る) | インターネット接続を確認(APIに出られていない) |
+| SDI出力が真っ黒 | sdi_outのSignal Formatが受け側と一致しているか確認 |
+| Keyが全白/全黒 | overlay_textのBackground Alphaが0か、KeyerがExternalか確認 |
+| 出力がカクつく | project.cookRate=59.94か、PCのGPU負荷を確認 |
+| 1920x1080にできない | ライセンスがNon-Commercial(1280制限)。Commercialが必要 |
 
 ## 注意事項
 
-- **住所変換は国土地理院APIを使用**するため、送出PCにインターネット接続が
-  必要です。通信断のときは最後に取得できた住所を保持し続けます
-  (市区町村境界を越えたときだけ問い合わせる設計なのでAPI負荷は僅少)
-- **UltraStudioの同時入出力**: キャプチャ(音声取り)と再生(Fill&Key出力)を
-  1台で同時に行えるかは機種依存です。UltraStudio 4K系は可、
-  HD Mini等は仕様をご確認ください。不可の場合は音声入力を別経路
-  (小型USBオーディオIF等)にするか、入出力で2台に分けてください
-- Fill&Key 2出力を使うため、UltraStudio側の設定(Desktop Video Setup)で
-  SDI出力が「Fill & Key」相当になっていることも確認してください
+- 住所変換は国土地理院APIを使用(市区町村を跨ぐときだけ問い合わせる設計)。
+  **通信断のときは最後の住所を保持**して表示が止まらないようにしています
+- **UltraStudioの同時入出力**(音声キャプチャとFill&Key再生の同時動作)は
+  機種依存です。UltraStudio 4K系は可。不可の機種では音声入力を別経路にするか、
+  方式Bにしてください
