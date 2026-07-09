@@ -66,7 +66,18 @@ WAVのほか、音声トラックを含む映像ファイル(MP4/MPEG-TS/MXF/MOV
 ```
 python -m nnn_decoder.cli 録音.wav --channel left --csv 位置ログ.csv
 python -m nnn_decoder.cli 収録.mp4 --channel right
+python -m nnn_decoder.cli 収録.mp4 --channel 3       # 多ch素材の3ch目(1始まり)
 python -m nnn_decoder.cli 収録.ts --audio-stream 1   # 2本目の音声トラック
+```
+
+多チャンネルLPCM素材(SDIエンベデッド音声のキャプチャ等)にも対応して
+います。WAVはWAVE_FORMAT_EXTENSIBLE(3ch以上でVLC/ffmpegが出力する形式)
+も直接読めます。素材を小さくして受け渡す場合は、音声だけを
+チャンネル数を維持したまま抜き出すのが確実です:
+
+```
+ffmpeg -i 収録.mp4 -vn -acodec pcm_s16le 音声のみ.wav   # 全ch維持で音声抽出
+ffmpeg -i 収録.mp4 -vn -acodec flac 音声のみ.flac       # ロスレス圧縮で容量半減
 ```
 
 MSKトーン(1.2〜2.4kHz)は音声圧縮に強く、AAC 48kbpsやMPEG-1 Layer2に

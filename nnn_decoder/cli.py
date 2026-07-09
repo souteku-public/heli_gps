@@ -15,10 +15,10 @@ import argparse
 import csv
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
-import wave
 
 import numpy as np
 
@@ -45,26 +45,75 @@ def extract_audio_with_ffmpeg(path: str, stream: int = 0) -> str:
     return tmp
 
 
+def _read_wav_raw(path: str) -> tuple[np.ndarray, int, int]:
+    """WAVを読む(モノラル〜多チャンネル、PCM/float、EXTENSIBLE形式対応).
+
+    標準waveモジュールは多チャンネルで使われるWAVE_FORMAT_EXTENSIBLE
+    (VLCやffmpegの3ch以上出力)を読めないため自前でRIFFを解析する。
+    戻り値: (インターリーブ生データ配列, チャンネル数, サンプリング周波数)
+    """
+    with open(path, "rb") as f:
+        hdr = f.read(12)
+        if len(hdr) < 12 or hdr[0:4] != b"RIFF" or hdr[8:12] != b"WAVE":
+            raise ValueError(f"WAVファイルではありません: {path}")
+        fmt = None
+        data = None
+        while True:
+            ch = f.read(8)
+            if len(ch) < 8:
+                break
+            cid, csz = struct.unpack("<4sI", ch)
+            if cid == b"fmt ":
+                fmt = f.read(csz)
+            elif cid == b"data":
+                data = f.read(csz)
+            else:
+                f.seek(csz, 1)
+            if csz & 1:
+                f.seek(1, 1)
+        if fmt is None or data is None:
+            raise ValueError("fmt/dataチャンクが見つかりません")
+        tag, nch, fs, _, _, bits = struct.unpack("<HHIIHH", fmt[:16])
+        if tag == 0xFFFE and len(fmt) >= 26:  # WAVE_FORMAT_EXTENSIBLE
+            tag = struct.unpack("<H", fmt[24:26])[0]
+
+        if tag == 1:  # 整数PCM
+            if bits == 16:
+                x = np.frombuffer(data, dtype="<i2").astype(np.float64) / 32768.0
+            elif bits == 24:
+                b = np.frombuffer(data, dtype=np.uint8).reshape(-1, 3)
+                v = (b[:, 0].astype(np.int32) | (b[:, 1].astype(np.int32) << 8)
+                     | (b[:, 2].astype(np.int32) << 16))
+                v = np.where(v >= 1 << 23, v - (1 << 24), v)
+                x = v.astype(np.float64) / float(1 << 23)
+            elif bits == 32:
+                x = np.frombuffer(data, dtype="<i4").astype(np.float64) / 2147483648.0
+            elif bits == 8:
+                x = (np.frombuffer(data, dtype=np.uint8).astype(np.float64) - 128.0) / 128.0
+            else:
+                raise ValueError(f"未対応のPCMビット深度: {bits}bit")
+        elif tag == 3:  # float PCM
+            dtype = "<f4" if bits == 32 else "<f8"
+            x = np.frombuffer(data, dtype=dtype).astype(np.float64)
+        else:
+            raise ValueError(f"未対応のWAVフォーマット (tag={tag:#x})")
+        return x, nch, fs
+
+
 def read_wav(path: str, channel: str) -> tuple[np.ndarray, int]:
-    with wave.open(path, "rb") as w:
-        fs = w.getframerate()
-        nch = w.getnchannels()
-        sw = w.getsampwidth()
-        raw = w.readframes(w.getnframes())
-    if sw == 2:
-        x = np.frombuffer(raw, dtype=np.int16).astype(np.float64) / 32768.0
-    elif sw == 4:
-        x = np.frombuffer(raw, dtype=np.int32).astype(np.float64) / 2147483648.0
-    elif sw == 1:
-        x = (np.frombuffer(raw, dtype=np.uint8).astype(np.float64) - 128.0) / 128.0
-    else:
-        raise ValueError(f"未対応のサンプル幅: {sw*8}bit")
+    x, nch, fs = _read_wav_raw(path)
     if nch > 1:
         x = x.reshape(-1, nch)
-        idx = {"left": 0, "right": 1}.get(channel)
-        if idx is None:  # mix
+        if channel == "mix":
             x = x.mean(axis=1)
         else:
+            idx = {"left": 0, "right": 1}.get(channel)
+            if idx is None:
+                # 数字指定は1始まりのチャンネル番号 (例 "3" = 3ch目)
+                idx = int(channel) - 1
+                if not (0 <= idx < nch):
+                    raise ValueError(
+                        f"チャンネル{channel}は存在しません (このファイルは{nch}ch)")
             x = x[:, min(idx, nch - 1)]
     return x, fs
 
@@ -75,8 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("input", help="入力ファイル (WAV, またはMP4/TS/MXF等の映像)")
     ap.add_argument("--baud", type=int, default=1200, choices=[1200, 2400],
                     help="モデムビットレート (既定 1200)")
-    ap.add_argument("--channel", default="left", choices=["left", "right", "mix"],
-                    help="使用チャンネル (既定 left)")
+    ap.add_argument("--channel", default="left",
+                    help="使用チャンネル: left / right / mix / チャンネル番号(1始まり, 例 3)"
+                         " (既定 left)")
     ap.add_argument("--audio-stream", type=int, default=0,
                     help="映像ファイル内の音声トラック番号 (既定 0)")
     ap.add_argument("--invert", action="store_true", help="マーク/スペース反転")
@@ -97,6 +147,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         x, fs = read_wav(wav_path, args.channel)
+    except ValueError as e:
+        print(f"エラー: {e}", file=sys.stderr)
+        return 2
     finally:
         if tmp:
             os.unlink(tmp)
