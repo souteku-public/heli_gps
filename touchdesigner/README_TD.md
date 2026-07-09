@@ -68,10 +68,24 @@ toxはTouchDesigner本体でしか生成できないため、リポジトリに�
 exec(open(r"C:\heli_gps\touchdesigner\build_network.py", encoding="utf-8").read())
 ```
 
-3. `/project1/HELI_GPS` の中に4つのノード(audio_in → gps_decode → overlay_text → sdi_out)
-   が生成され、`HELI_GPS.tox` が自動保存されます
+3. `/project1/HELI_GPS` の中に**6つのノード**が生成され、`HELI_GPS.tox`
+   が自動保存されます:
+   - **audio_in** (Audio Device In CHOP) … EMB音声。Blackmagic・8ch・自動設定
+   - **video_in** (Video Device In TOP) … ★Blackmagic音声を流すために必須
+   - **gps_decode** (Script CHOP) … 復調+住所変換
+   - **overlay_text** (Text TOP) … テロップ描画
+   - **sdi_out** (Video Device Out TOP) … 1080i Fill&Key出力
+   - **force_cook** (Execute DAT) … 毎フレーム強制クック(遅延評価対策)
 4. ネットワーク画面の何もない所をダブルクリックすると階層を移動できます。
    `HELI_GPS` と書かれた箱をダブルクリックして中に入ってください
+
+> **重要 — 二重に作らない**: このスクリプトは実行時に既存のHELI_GPSを
+> 削除してから作り直します。手作業でコピーを作ったり、階層違い
+> (`/HELI_GPS` と `/project1/HELI_GPS`)に2つできると、同じUltraStudioを
+> 奪い合って誤動作します。**HELI_GPSは1つだけ**にしてください。
+>
+> スクリプト冒頭の `DEVICE = "UltraStudio HD Mini"` が実機の型番と違う
+> 場合は、その行を書き換えてから実行してください。
 
 > 以後、別のプロジェクトで使うときは、エクスプローラから `HELI_GPS.tox` を
 > TDのネットワーク画面にドラッグ&ドロップするだけです。
@@ -81,21 +95,34 @@ exec(open(r"C:\heli_gps\touchdesigner\build_network.py", encoding="utf-8").read(
 ### 3-1. audio_in (Audio Device In CHOP) — UltraStudioの音声を取る
 
 1. `audio_in` を左クリック → `p` でパラメータ画面
-2. **Driver** と **Device** のプルダウンから **Blackmagic / UltraStudio** を選択
-3. **Sample Rate** が 48000 になっていることを確認
-4. ノードのビューアに波形が並びます。EMB音声の各chが `chan1, chan2, ...` として
-   見えるので、**GPSが乗っているチャンネルを確認**します:
+2. **Driver=Blackmagic / Device=お使いの機種 / Number of Channels=8**
+   になっているか確認(スクリプトが自動設定済み)
+   - **Rate欄が44100とグレー表示でも問題ありません**。Blackmagic選択時は
+     実レートがデバイスから自動供給されます(ch数が8になっていれば正常)
+3. **★video_in を必ず動かすこと(重要)**: TD＋Blackmagicでは、同じデバイスの
+   **映像入力(Video Device In TOP)がアクティブに動いていないと音声が
+   流れません**。`video_in` のビューアをオンにして**SDI映像が映ることを
+   確認**してください。映像が映った瞬間に audio_in の波形が振れ始めます。
+   video_inは映像確認用で出力しませんが、**消さないでください**
+4. `audio_in` のビューアをオンにすると `chan1, chan2, ...` の波形が並びます。
+   **GPSが乗っているチャンネルを確認**します:
    - GPSチャンネルは**常時ビーッと鳴っている1200Hz系のトーン**なので、
-     波形が常に密に振れているチャンネルがそれです(今回の収録ではch3=chan3)
+     波形が常に一定に振れているチャンネルがそれです(今回の収録ではch3)
    - 見分けがつかない場合は、次の3-2で「音声チャンネル」を0,1,2,...と
      順に変えて、住所が表示される番号を探すのが確実です
 
+> **audio_inの波形が全chゼロのまま** → まず video_in の映像が映っているか
+> 確認(手順3)。映像が映っているのに音声0なら、audio_inのActiveを
+> Off→Onで再オープン。
+>
 > **DeviceにBlackmagicが出てこない場合** → ページ末尾の「方式B: OSC受信」へ。
 > テロップ出力側の構成はそのまま使えます。
 
 ### 3-2. gps_decode (Script CHOP) — 復調と住所変換
 
-1. `gps_decode` を選択 → `p` → **「Heli GPS」タブ**(カスタムパラメータ)
+1. `gps_decode` を選択 → `p` → **「Script」タブの Setup Parameters ボタンを
+   1回押す**(これで下記のカスタムパラメータが生成されます。押さないと
+   「Heli GPS」タブが出ません) → **「Heli GPS」タブ**を開く
 2. 設定項目:
 
 | パラメータ | 設定値 |
