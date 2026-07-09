@@ -57,14 +57,20 @@ python -m nnn_decoder.app
 - 「NMEAをUDP送出」でGGA/RMCセンテンスを `127.0.0.1:10110` へ送出
   (OpenCPN・gpsd等の地図ソフトでそのまま航跡表示できます)
 
-### 2. CLI (WAVファイルの復調)
+### 2. CLI (WAV/映像ファイルの復調)
 
 収録済み素材や録音からの位置ログ復元に使えます。
+WAVのほか、音声トラックを含む映像ファイル(MP4/MPEG-TS/MXF/MOV等)を
+直接指定できます(ffmpegがPATHにあること。音声を自動抽出します)。
 
 ```
 python -m nnn_decoder.cli 録音.wav --channel left --csv 位置ログ.csv
-python -m nnn_decoder.cli 録音.wav --baud 2400 --channel right
+python -m nnn_decoder.cli 収録.mp4 --channel right
+python -m nnn_decoder.cli 収録.ts --audio-stream 1   # 2本目の音声トラック
 ```
+
+MSKトーン(1.2〜2.4kHz)は音声圧縮に強く、AAC 48kbpsやMPEG-1 Layer2に
+圧縮された収録素材でも復調できることを確認済みです。
 
 ### 3. テスト音声の生成 (実機なしでの動作確認)
 

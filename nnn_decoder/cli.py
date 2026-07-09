@@ -1,24 +1,48 @@
-"""WAVファイル/録音のオフラインデコードCLI.
+"""WAV/映像ファイルのオフラインデコードCLI.
 
 使い方:
     python -m nnn_decoder.cli 録音.wav
-    python -m nnn_decoder.cli 録音.wav --baud 2400 --channel right --csv out.csv
+    python -m nnn_decoder.cli 収録.mp4 --channel right --csv out.csv
 
-キャプチャボードの音声を一度WAVに録音して動作確認する用途、
-および過去の収録素材からの位置ログ復元に使える。
+WAV以外(MP4/TS/MXF/MOV等の映像ファイル)は ffmpeg で音声トラックを
+抽出してから復調する(ffmpegがPATHにあること)。
+キャプチャボードの収録素材からの位置ログ復元にそのまま使える。
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import wave
 
 import numpy as np
 
 from .geodesy import deg_to_dms_str
 from .pipeline import DecoderPipeline
+
+
+def extract_audio_with_ffmpeg(path: str, stream: int = 0) -> str:
+    """映像ファイルから音声トラックをWAV(48kHz)に抽出し、一時ファイルパスを返す."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError(
+            "WAV以外のファイルの読み込みには ffmpeg が必要です。\n"
+            "https://ffmpeg.org/ からインストールしてPATHに追加してください。")
+    fd, tmp = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    cmd = [ffmpeg, "-y", "-v", "error", "-i", path,
+           "-map", f"0:a:{stream}", "-vn", "-acodec", "pcm_s16le",
+           "-ar", "48000", tmp]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        os.unlink(tmp)
+        raise RuntimeError(f"ffmpegによる音声抽出に失敗しました:\n{res.stderr.strip()}")
+    return tmp
 
 
 def read_wav(path: str, channel: str) -> tuple[np.ndarray, int]:
@@ -46,17 +70,36 @@ def read_wav(path: str, channel: str) -> tuple[np.ndarray, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="NNNフォーマットGPS音声デコーダ (WAVファイル入力)")
-    ap.add_argument("wav", help="入力WAVファイル")
+    ap = argparse.ArgumentParser(
+        description="NNNフォーマットGPS音声デコーダ (WAV/映像ファイル入力)")
+    ap.add_argument("input", help="入力ファイル (WAV, またはMP4/TS/MXF等の映像)")
     ap.add_argument("--baud", type=int, default=1200, choices=[1200, 2400],
                     help="モデムビットレート (既定 1200)")
     ap.add_argument("--channel", default="left", choices=["left", "right", "mix"],
                     help="使用チャンネル (既定 left)")
+    ap.add_argument("--audio-stream", type=int, default=0,
+                    help="映像ファイル内の音声トラック番号 (既定 0)")
     ap.add_argument("--invert", action="store_true", help="マーク/スペース反転")
     ap.add_argument("--csv", help="復調結果をCSVに保存")
     args = ap.parse_args(argv)
 
-    x, fs = read_wav(args.wav, args.channel)
+    tmp = None
+    if not args.input.lower().endswith(".wav"):
+        try:
+            tmp = extract_audio_with_ffmpeg(args.input, args.audio_stream)
+        except RuntimeError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        print(f"音声トラック{args.audio_stream}を抽出しました", file=sys.stderr)
+        wav_path = tmp
+    else:
+        wav_path = args.input
+
+    try:
+        x, fs = read_wav(wav_path, args.channel)
+    finally:
+        if tmp:
+            os.unlink(tmp)
     pipe = DecoderPipeline(fs, baud=args.baud, invert=args.invert)
 
     rows = []
