@@ -170,6 +170,18 @@ if not _set_decode_pars():
     )
     print("gps_decode: カスタムパラメータを遅延設定します(Setup Parameters反映待ち)")
 
+# --- 矢印キーで位置調整 (Keyboard In DAT + コールバック) ---
+kb_cb = c.create(textDAT, "nudge_keys_callbacks")
+kb_cb.nodeX, kb_cb.nodeY = 450, 380
+with open(os.path.join(HELI_GPS_LIB, "touchdesigner", "nudge_keys_callbacks.py"),
+          encoding="utf-8") as f:
+    kb_cb.text = f.read()
+kb = c.create(keyboardinDAT, "nudge_keys")
+kb.nodeX, kb.nodeY = 450, 300
+_try(kb, "callbacks", "nudge_keys_callbacks")
+# 矢印キーだけ拾う(他アプリのショートカットと干渉しにくいよう限定)
+_try(kb, "keys", "up down left right")
+
 # --- コントロールUI(Controlsページ)を構築 ---
 # HELI_GPSコンテナに操作用カスタムパラメータを追加し、
 # gps_decode/overlay_text をバインドする。

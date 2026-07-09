@@ -86,6 +86,10 @@ def setup_ui(container=None):
     p = page.appendXY("Pos", label="位置(X,Y)px")
     p[0].default = 0
     p[1].default = 60
+    p = page.appendFloat("Nudgestep", label="矢印キーの移動量(px)")[0]
+    p.default = 1
+    p.normMin, p.normMax = 1, 50
+    p.clampMin = True
 
     p = page.appendRGB("Fontcolor", label="文字色")
     for i in range(3):
