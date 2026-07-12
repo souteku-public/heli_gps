@@ -43,14 +43,35 @@ class Address:
     city: str          # 市区町村 (例 "千葉市美浜区")
     town: str = ""     # 町丁目 (例 "幕張西三丁目")
     muni_cd: str = ""
+    offshore: bool = False  # 海上(最寄り市町村)を指すか
 
-    def text(self, level: str = "city") -> str:
-        """表示用文字列. level: 'pref' / 'city' / 'town'"""
+    def _city_muni(self) -> str:
+        """政令指定都市の区を省いた市町村名 ("千葉市美浜区"→"千葉市").
+
+        東京特別区など「市」を含まない区(例 "千代田区")はそのまま。
+        """
+        i = self.city.find("市")
+        if i >= 0 and "区" in self.city[i + 1:]:
+            return self.city[: i + 1]
+        return self.city
+
+    def text(self, level: str = "muni", offshore_suffix: str = "沖") -> str:
+        """表示用文字列.
+
+        level:
+            'pref' … 都道府県
+            'muni' … 都道府県+市町村(政令市の区は省略) ※既定
+            'city' … 都道府県+市区町村(政令市の区も含む)
+            'town' … 都道府県+市区町村+町丁目(要オンライン)
+        海上のときは市町村名の後ろに offshore_suffix("沖")を付す。
+        """
+        suf = offshore_suffix if self.offshore else ""
         if level == "pref":
-            return self.pref
-        if level == "town":
+            return f"{self.pref}{suf}"
+        if level == "town" and self.town and not self.offshore:
             return f"{self.pref}{self.city}{self.town}"
-        return f"{self.pref}{self.city}"
+        city = self._city_muni() if level == "muni" else self.city
+        return f"{self.pref}{city}{suf}"
 
 
 def _load_muni_table() -> dict:
@@ -156,6 +177,58 @@ class OfflineMuniLookup:
                     return cd
         return None
 
+    @staticmethod
+    def _min_dist2_to_rings(lon, lat, rings, coslat) -> float:
+        """点から各リング頂点までの最小(スケール済み)二乗距離."""
+        best = 1e18
+        for xs, ys in rings:
+            for k in range(len(xs)):
+                dx = (xs[k] - lon) * coslat
+                dy = ys[k] - lat
+                d2 = dx * dx + dy * dy
+                if d2 < best:
+                    best = d2
+        return best
+
+    def nearest_cd(self, lat: float, lon: float) -> Optional[str]:
+        """点を含む市町村が無い(海上等)とき、最寄りの市町村コードを返す.
+
+        全市町村のバウンディングボックス距離で粗く絞り、上位候補についてのみ
+        頂点距離を計算する(海上クエリは頻度が低いので全走査でも十分高速)。
+        """
+        import math as _m
+        coslat = _m.cos(_m.radians(lat))
+        scored = []
+        for i, (cd, rings, bb) in enumerate(self._geoms):
+            dx = 0.0
+            if lon < bb[0]:
+                dx = bb[0] - lon
+            elif lon > bb[2]:
+                dx = lon - bb[2]
+            dy = 0.0
+            if lat < bb[1]:
+                dy = bb[1] - lat
+            elif lat > bb[3]:
+                dy = lat - bb[3]
+            scored.append(((dx * coslat) ** 2 + dy * dy, i))
+        scored.sort(key=lambda t: t[0])
+        best_cd, best_d2 = None, None
+        for d2bb, i in scored[:40]:
+            if best_d2 is not None and d2bb > best_d2:
+                break  # bbox距離が既知最良を超えたら打ち切り
+            cd, rings, bb = self._geoms[i]
+            d2 = self._min_dist2_to_rings(lon, lat, rings, coslat)
+            if best_d2 is None or d2 < best_d2:
+                best_d2, best_cd = d2, cd
+        return best_cd
+
+    def locate(self, lat: float, lon: float) -> tuple[Optional[str], bool]:
+        """(市町村コード, 海上フラグ) を返す. 内陸=False, 海上=True."""
+        cd = self.lookup_cd(lat, lon)
+        if cd is not None:
+            return cd, False
+        return self.nearest_cd(lat, lon), True
+
 
 class ReverseGeocoder:
     """同期版逆ジオコーダ(キャッシュ・間引き付き).
@@ -204,13 +277,14 @@ class ReverseGeocoder:
                        town=res.get("lv01Nm") or "", muni_cd=muni_cd)
 
     def _lookup_offline(self, lat: float, lon: float) -> Optional[Address]:
-        cd = self._offline.lookup_cd(lat, lon)
+        cd, offshore = self._offline.locate(lat, lon)
         if cd is None:
             return None
         names = self.muni_name(cd)
         if names is None:
             return None
-        return Address(pref=names[0], city=names[1], town="", muni_cd=cd)
+        return Address(pref=names[0], city=names[1], town="", muni_cd=cd,
+                       offshore=offshore)
 
     def lookup(self, lat: float, lon: float, force: bool = False) -> Optional[Address]:
         """位置に対応する住所を返す(間引き条件内なら前回値をそのまま返す)."""
@@ -224,8 +298,10 @@ class ReverseGeocoder:
         if self._offline is not None:
             addr = self._lookup_offline(lat, lon)  # ネット不要・即時
 
-        if self.mode in ("online", "auto"):
-            # onlineは全解決をAPIで、autoは町丁目の補完・海上境界の補正に使う
+        # 海上(offshore)ではAPIに町丁目が無いのでオフライン結果(最寄り市町村+沖)
+        # をそのまま使う。内陸のときだけAPIで町丁目を補完する。
+        offshore = addr.offshore if addr is not None else False
+        if self.mode in ("online", "auto") and not offshore:
             try:
                 api = self._query(lat, lon)
                 if api is not None:

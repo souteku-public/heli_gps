@@ -47,12 +47,13 @@ def setup_ui(container=None):
     p.default = "offline"
 
     p = page.appendMenu("Addrlevel", label="住所の粒度")[0]
-    p.menuNames = ["pref", "city", "town"]
-    p.menuLabels = ["都道府県", "市区町村", "町丁目"]
-    p.default = "city"
+    p.menuNames = ["pref", "muni", "city", "town"]
+    p.menuLabels = ["都道府県", "市町村(政令市は市まで)",
+                    "市区町村(区あり)", "町丁目(要ネット)"]
+    p.default = "muni"
 
     p = page.appendStr("Textformat", label="表示書式")[0]
-    p.default = "{address}"
+    p.default = "{address}上空"
     p = page.appendStr("Staletext", label="受信途絶時の表示")[0]
     p.default = ""
     p = page.appendInt("Audiochan", label="GPS音声ch(0始まり)")[0]

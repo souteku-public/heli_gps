@@ -21,8 +21,34 @@ def test_muni_table_loaded():
 def test_address_text_levels():
     a = Address(pref="千葉県", city="千葉市美浜区", town="幕張西三丁目")
     assert a.text("pref") == "千葉県"
-    assert a.text("city") == "千葉県千葉市美浜区"
+    assert a.text("muni") == "千葉県千葉市"           # 政令市の区を省く
+    assert a.text("city") == "千葉県千葉市美浜区"      # 区あり
     assert a.text("town") == "千葉県千葉市美浜区幕張西三丁目"
+
+
+def test_address_muni_special_ward():
+    # 東京特別区は「市」を含まないのでそのまま
+    a = Address(pref="東京都", city="千代田区")
+    assert a.text("muni") == "東京都千代田区"
+    # 政令市(区あり)
+    b = Address(pref="静岡県", city="浜松市中央区")
+    assert b.text("muni") == "静岡県浜松市"
+
+
+def test_address_offshore_suffix():
+    a = Address(pref="千葉県", city="市原市", offshore=True)
+    assert a.text("muni") == "千葉県市原市沖"
+    assert ("{address}上空").format(address=a.text("muni")) == "千葉県市原市沖上空"
+
+
+def test_offline_offshore_nearest():
+    """海上では最寄り市町村+沖になること(ネットワーク不要)."""
+    geo = ReverseGeocoder(mode="offline", min_interval_s=0.0, min_move_m=0.0)
+    a = geo.lookup(35.55, 140.05, force=True)   # 東京湾上
+    assert a is not None
+    assert a.offshore is True
+    assert a.text("muni").endswith("沖")
+    assert a.pref  # 都道府県が入っている
 
 
 def test_lookup_with_mocked_api(monkeypatch):
@@ -79,10 +105,10 @@ def test_offline_lookup_known_points():
         a = geo.lookup(lat, lon, force=True)
         assert a is not None and a.city == city, (lat, lon, a)
 
-    # 海上は判定なし → 前回値を保持
-    before = geo.current
-    a = geo.lookup(39.0, 143.5, force=True)
-    assert a == before
+    # 海上は最寄り市町村+沖(offshore=True)を返す
+    a = geo.lookup(39.0, 143.5, force=True)   # 三陸沖
+    assert a is not None and a.offshore is True
+    assert a.text("muni").endswith("沖")
 
 
 def test_offline_no_network_access(monkeypatch):

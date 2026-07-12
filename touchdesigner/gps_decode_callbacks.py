@@ -39,15 +39,16 @@ def onSetupParameters(scriptOp):
     p = page.appendStr("Texttop", label="更新するText TOP")
     p[0].default = "overlay_text"
     p = page.appendStr("Textformat", label="表示フォーマット")
-    p[0].default = "{address}"
+    p[0].default = "{address}上空"
     p = page.appendStr("Staletext", label="受信途絶時の表示")
     p[0].default = ""
     p = page.appendFloat("Staletimeout", label="受信途絶とみなす秒数")
     p[0].default = 5.0
     p = page.appendMenu("Addrlevel", label="住所の詳細度")
-    p[0].menuNames = ["pref", "city", "town"]
-    p[0].menuLabels = ["都道府県", "市区町村", "町丁目"]
-    p[0].default = "city"
+    p[0].menuNames = ["pref", "muni", "city", "town"]
+    p[0].menuLabels = ["都道府県", "市町村(政令市は市まで)",
+                       "市区町村(区あり)", "町丁目(要ネット)"]
+    p[0].default = "muni"
     p = page.appendMenu("Geomode", label="住所変換エンジン")
     p[0].menuNames = ["offline", "auto", "online"]
     p[0].menuLabels = ["オフライン(ネット不要・市区町村まで)",
@@ -102,8 +103,8 @@ def onCook(scriptOp):
             text = scriptOp.par.Staletext.eval()
         else:
             addr = _state["geo"].current
-            addr_s = addr.text(scriptOp.par.Addrlevel.eval() or "city") if addr else ""
-            text = (scriptOp.par.Textformat.eval() or "{address}").format(
+            addr_s = addr.text(scriptOp.par.Addrlevel.eval() or "muni") if addr else ""
+            text = (scriptOp.par.Textformat.eval() or "{address}上空").format(
                 address=addr_s,
                 alt=f"{pkt.alt_m:.0f}",
                 lat=f"{pkt.lat_wgs84:.5f}",

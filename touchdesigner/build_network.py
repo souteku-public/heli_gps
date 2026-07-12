@@ -139,10 +139,10 @@ def _set_decode_pars():
         "Baud": "1200",
         "Audiochan": 2,          # EMBのCH3(0始まりで2)
         "Texttop": "overlay_text",
-        "Textformat": "{address}",
+        "Textformat": "{address}上空",
         "Staletext": "",
         "Staletimeout": 5,
-        "Addrlevel": "city",
+        "Addrlevel": "muni",
         "Geomode": "offline",
     }
     ok = True
@@ -162,8 +162,8 @@ if not _set_decode_pars():
         "def run():\n"
         "    d = op('" + dec.path + "')\n"
         "    for k,v in {'Baud':'1200','Audiochan':2,'Texttop':'overlay_text',"
-        "'Textformat':'{address}','Staletext':'','Staletimeout':5,"
-        "'Addrlevel':'city','Geomode':'offline'}.items():\n"
+        "'Textformat':'{address}上空','Staletext':'','Staletimeout':5,"
+        "'Addrlevel':'muni','Geomode':'offline'}.items():\n"
         "        try: setattr(d.par,k,v)\n"
         "        except: pass\n"
         "    op('" + dec.path + "').parent().op('_setpars_once').destroy()\n"
