@@ -17,6 +17,10 @@ if HELI_GPS_LIB not in sys.path:
 
 from nnn_decoder.pipeline import DecoderPipeline          # noqa: E402
 from nnn_decoder.geocode import AsyncReverseGeocoder      # noqa: E402
+from nnn_decoder.osc import OscSender                     # noqa: E402
+
+# 外部Python制御UI(control_ui.py)へ状態を送るOSC送出先
+STATUS_OSC = ("127.0.0.1", 9002)
 
 _state = {
     "pipe": None,
@@ -25,6 +29,8 @@ _state = {
     "baud": None,
     "last_pkt": None,
     "last_time": 0.0,
+    "osc": None,
+    "sent_text": None,
 }
 
 
@@ -69,6 +75,11 @@ def _ensure_pipeline(scriptOp, rate):
     if _state["geo"] is None or _state.get("geomode") != mode:
         _state["geo"] = AsyncReverseGeocoder(mode=mode)
         _state["geomode"] = mode
+    if _state["osc"] is None:
+        try:
+            _state["osc"] = OscSender(*STATUS_OSC)
+        except Exception:
+            _state["osc"] = None
 
 
 def onCook(scriptOp):
@@ -97,6 +108,19 @@ def onCook(scriptOp):
             _state["last_pkt"] = pkt
             _state["last_time"] = time.monotonic()
             _state["geo"].submit(pkt.lat_wgs84, pkt.lon_wgs84)
+            # 制御UIへ位置・状態を送出(復調のたび≒毎秒1回)
+            if _state["osc"] is not None:
+                try:
+                    _state["osc"].send_raw("/heli/position",
+                                           float(pkt.lat_wgs84),
+                                           float(pkt.lon_wgs84),
+                                           float(pkt.alt_m))
+                    _state["osc"].send_raw(
+                        "/heli/status", int(pkt.fix_status),
+                        int(pkt.satellites if pkt.satellites is not None else -1),
+                        pkt.station_id)
+                except Exception:
+                    pass
 
     pkt = _state["last_pkt"]
     age = time.monotonic() - _state["last_time"] if pkt else 1e9
@@ -122,6 +146,13 @@ def onCook(scriptOp):
             )
         if top.par.text.eval() != text:
             top.par.text = text
+        # 実際に表示中のスーパー文字列を制御UIへ(変化時のみ)
+        if _state["osc"] is not None and _state.get("sent_text") != text:
+            _state["sent_text"] = text
+            try:
+                _state["osc"].send_raw("/heli/super", text)
+            except Exception:
+                pass
 
     # --- 出力チャンネル ---
     for name, val in (

@@ -47,12 +47,50 @@ def osc_message(address: str, *args) -> bytes:
     return _osc_str(address) + _osc_str(tags) + payload
 
 
+def _read_osc_string(data: bytes, i: int) -> tuple[str, int]:
+    end = data.index(b"\x00", i)
+    s = data[i:end].decode("utf-8", "replace")
+    i = end + 1
+    i += (4 - i % 4) % 4
+    return s, i
+
+
+def osc_parse(data: bytes) -> tuple[str, list]:
+    """OSCメッセージをデコードし (アドレス, 引数リスト) を返す.
+
+    対応型: int(i) / float(f) / string(s)。未対応タグは4バイト読み飛ばす。
+    不正データは (アドレス, []) を返す。
+    """
+    try:
+        address, i = _read_osc_string(data, 0)
+        if i >= len(data) or data[i:i + 1] != b",":
+            return address, []
+        tags, i = _read_osc_string(data, i)
+        args: list = []
+        for t in tags[1:]:
+            if t == "i":
+                args.append(struct.unpack(">i", data[i:i + 4])[0]); i += 4
+            elif t == "f":
+                args.append(struct.unpack(">f", data[i:i + 4])[0]); i += 4
+            elif t == "s":
+                s, i = _read_osc_string(data, i); args.append(s)
+            else:
+                i += 4
+        return address, args
+    except Exception:
+        return "", []
+
+
 class OscSender:
     """位置・住所をOSCで送出する."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9000):
         self.addr = (host, port)
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def send_raw(self, address: str, *args) -> None:
+        """任意のOSCメッセージを送出."""
+        self._sock.sendto(osc_message(address, *args), self.addr)
 
     def send_packet(self, pkt: NNNPacket, address_text: str = "") -> None:
         self._sock.sendto(

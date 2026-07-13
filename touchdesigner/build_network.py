@@ -98,6 +98,18 @@ fc.text = (
     "    return\n"
 )
 
+# --- 外部Python制御UIからのOSC受信 (ポート9001) ---
+octl_cb = c.create(textDAT, "osc_ctrl_callbacks")
+octl_cb.nodeX, octl_cb.nodeY = 700, 300
+with open(os.path.join(HELI_GPS_LIB, "touchdesigner", "osc_ctrl_callbacks.py"),
+          encoding="utf-8") as f:
+    octl_cb.text = f.read()
+osc_in = c.create(oscinDAT, "osc_ctrl")
+osc_in.nodeX, osc_in.nodeY = 700, 220
+_try(osc_in, "port", 9001)
+_try(osc_in, "callbacks", "osc_ctrl_callbacks")
+_try(osc_in, "active", True)
+
 # --- テキスト描画 (フォント・サイズ・位置はこのTOPのパラメータでUI調整) ---
 text = c.create(textTOP, "overlay_text")
 text.nodeX, text.nodeY = 450, 200

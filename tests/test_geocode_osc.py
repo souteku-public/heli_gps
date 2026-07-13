@@ -139,6 +139,27 @@ def test_osc_message_encoding():
     assert len(msg3) % 4 == 0
 
 
+def test_osc_parse_roundtrip():
+    from nnn_decoder.osc import osc_parse
+
+    addr, args = osc_parse(osc_message("/heli/position", 35.5, 140.0, 620.0))
+    assert addr == "/heli/position"
+    assert len(args) == 3
+    assert abs(args[0] - 35.5) < 1e-4 and abs(args[2] - 620.0) < 1e-3
+
+    addr, args = osc_parse(osc_message("/heli/super", "千葉県千葉市上空"))
+    assert addr == "/heli/super" and args == ["千葉県千葉市上空"]
+
+    addr, args = osc_parse(osc_message("/heli/status", 0, 9, "01"))
+    assert addr == "/heli/status" and args == [0, 9, "01"]
+
+    addr, args = osc_parse(osc_message("/heli/ctrl/Fontsize", 90.0))
+    assert addr == "/heli/ctrl/Fontsize" and abs(args[0] - 90.0) < 1e-3
+
+    # 不正データでも落ちない
+    assert osc_parse(b"garbage")[1] == []
+
+
 def test_osc_send_packet_smoke():
     """UDP送信のスモークテスト(自ホストの空きポートへ)."""
     import socket
