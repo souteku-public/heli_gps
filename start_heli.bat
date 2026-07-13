@@ -19,8 +19,8 @@ if not exist "%TOE%" (
     exit /b 1
 )
 
-rem .toe を関連付けで開く(TDのバージョン/インストール先に依存しない)
-start "" "%TOE%"
+rem .toe を関連付けで開く(explorer経由=ダブルクリックと同じShellExecute。最も確実)
+start "" explorer.exe "%TOE%"
 
 rem 制御UIはリポジトリ直下で実行(nnn_decoder を import するため)
 cd /d "%LIB%"
