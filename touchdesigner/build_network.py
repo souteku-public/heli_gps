@@ -30,7 +30,7 @@ if root is None:
 
 c = root.create(containerCOMP, "HELI_GPS")
 
-DEVICE = "UltraStudio HD Mini"   # ★機種名。デバイス欄のプルダウン表記に合わせる
+DEVICE = "UltraStudio HD Mini"   # ★機種名の一部(部分一致で探すので正確でなくてよい)
 
 
 def _try(obj, name, *values):
@@ -44,19 +44,34 @@ def _try(obj, name, *values):
     return False
 
 
-# --- 音声入力 (Blackmagic 8ch) ---
+def _pick_device(par, substr):
+    """メニュー候補から substr を含む項目を選ぶ(デバイス名にマシン固有IDが
+    付く場合があるため完全一致でなく部分一致で拾う)."""
+    try:
+        for name in par.menuNames:
+            if substr in name:
+                par.val = name
+                return name
+    except Exception:
+        pass
+    return None
+
+
+# --- 音声入力 (Blackmagic 8ch。ドライバは小文字 'blackmagic') ---
 audio = c.create(audiodeviceinCHOP, "audio_in")
 audio.nodeX, audio.nodeY = 0, 200
-_try(audio, "driver", "Blackmagic")
-_try(audio, "device", DEVICE)
-_try(audio, "numchannels", 8)
+_try(audio, "driver", "blackmagic", "Blackmagic")
+if not _pick_device(audio.par.device, DEVICE):
+    print(f"audio_in: '{DEVICE}' を含むデバイスが見つかりません。手動選択してください")
+_try(audio, "active", False)   # 一旦Off/Onでストリーム再オープン
 _try(audio, "active", True)
+# Blackmagicドライバは埋め込み全chを自動供給(チャンネル数設定は不要)
 
 # --- 映像入力 (音声を流すために必須。表示はしないが常時クックさせる) ---
 video = c.create(videodeviceinTOP, "video_in")
 video.nodeX, video.nodeY = 0, 380
 _try(video, "library", "Blackmagic")
-_try(video, "device", DEVICE)
+_pick_device(video.par.device, DEVICE)
 
 # --- 復調Script CHOP + コールバック ---
 cb = c.create(textDAT, "gps_decode_callbacks")
@@ -113,10 +128,10 @@ out = c.create(videodeviceoutTOP, "sdi_out")
 out.nodeX, out.nodeY = 700, 200
 out.inputConnectors[0].connect(text)
 _try(out, "library", "Blackmagic")
-_try(out, "device", DEVICE)
+_pick_device(out.par.device, DEVICE)
 # Fill&Key: Output Pixel Format = 8-bit + 8-bit Key (Alpha)
 #   → SDI OUT 1本目=Fill(カラー)、2本目=Key(アルファ)
-if not _try(out, "signalformat", "1080i5994", "1080i59.94", "1080i2997"):
+if not _try(out, "signalformat", "f1920x1080i-59.94hz", "1080i5994", "1080i59.94"):
     print("sdi_out: signalformat は手動で 1080i 59.94 に設定してください")
 if not _try(out, "outputpixelformat", "fixed8key8"):
     print("sdi_out: Output Pixel Format を手動で「8-bit + 8-bit Key」に設定してください")
