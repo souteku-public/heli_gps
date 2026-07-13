@@ -81,13 +81,22 @@ def onCook(scriptOp):
     rate = ain.rate
     _ensure_pipeline(scriptOp, rate)
 
-    chan = min(int(scriptOp.par.Audiochan.eval()), ain.numChans - 1)
-    x = ain.numpyArray()[chan]
-
-    for pkt in _state["pipe"].process(x.astype("float64")):
-        _state["last_pkt"] = pkt
-        _state["last_time"] = time.monotonic()
-        _state["geo"].submit(pkt.lat_wgs84, pkt.lon_wgs84)
+    # ★1フレームにつき音声処理は1回だけ。
+    # force=True等で同一フレーム内に複数回cookされると、同じ音声スライスが
+    # 復調器へ二重投入されビット同期が壊れる(実測でパケット0になる)。
+    # グローバルフレーム番号で重複処理を防ぐ。
+    try:
+        frame = absTime.frame           # noqa: F821 (TDグローバル)
+    except Exception:
+        frame = None
+    if frame is None or _state.get("last_frame") != frame:
+        _state["last_frame"] = frame
+        chan = min(int(scriptOp.par.Audiochan.eval()), ain.numChans - 1)
+        x = ain.numpyArray()[chan]
+        for pkt in _state["pipe"].process(x.astype("float64")):
+            _state["last_pkt"] = pkt
+            _state["last_time"] = time.monotonic()
+            _state["geo"].submit(pkt.lat_wgs84, pkt.lon_wgs84)
 
     pkt = _state["last_pkt"]
     age = time.monotonic() - _state["last_time"] if pkt else 1e9
