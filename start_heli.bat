@@ -1,21 +1,31 @@
 @echo off
 rem ヘリGPSスーパー 起動バッチ
-rem   1) TouchDesigner で heli_telop.toe を開く
+rem   1) heli_telop.toe を TouchDesigner で開く(ファイル関連付けで起動)
 rem   2) Python制御UI(control_ui.py)を起動
 rem
-rem ★環境に合わせてパスを修正してください:
-rem   - TDEXE : TouchDesigner本体のパス(バージョンでフォルダ名が変わります)
-rem   - TOE   : プロジェクトファイル
-rem   - LIB   : リポジトリの場所
+rem このbatは heli_gps 直下に置く前提。パスはbat自身の場所から自動算出するので
+rem 置き場所を変えても編集不要(.toe名を変えた場合のみ下記TOENAMEを修正)。
 
-set "TDEXE=C:\Program Files\Derivative\TouchDesigner\bin\TouchDesigner.exe"
-set "TOE=C:\heli_gps\touchdesigner\heli_telop.toe"
-set "LIB=C:\heli_gps"
+setlocal
+set "LIB=%~dp0"
+set "TOENAME=heli_telop.toe"
+set "TOE=%LIB%touchdesigner\%TOENAME%"
 
-start "" "%TDEXE%" "%TOE%"
+if not exist "%TOE%" (
+    echo [エラー] プロジェクトファイルが見つかりません:
+    echo    %TOE%
+    echo touchdesigner フォルダ内の .toe 名を確認し、必要なら TOENAME を修正してください。
+    pause
+    exit /b 1
+)
 
-rem 制御UIはリポジトリ直下で実行(nnn_decoderをimportするため)
+rem .toe を関連付けで開く(TDのバージョン/インストール先に依存しない)
+start "" "%TOE%"
+
+rem 制御UIはリポジトリ直下で実行(nnn_decoder を import するため)
 cd /d "%LIB%"
 start "" pythonw control_ui.py
+if errorlevel 1 start "" python control_ui.py
 
-exit
+endlocal
+exit /b 0
