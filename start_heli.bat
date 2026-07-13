@@ -24,8 +24,8 @@ start "" "%TOE%"
 
 rem 制御UIはリポジトリ直下で実行(nnn_decoder を import するため)
 cd /d "%LIB%"
-start "" pythonw control_ui.py
-if errorlevel 1 start "" python control_ui.py
+rem pythonw があればコンソールなしで1つだけ起動、無ければ python で起動(排他)
+where pythonw >nul 2>&1 && ( start "" pythonw control_ui.py ) || ( start "" python control_ui.py )
 
 endlocal
 exit /b 0
