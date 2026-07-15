@@ -66,13 +66,24 @@ class SuperRenderer:
     def _font(self) -> ImageFont.FreeTypeFont:
         path = self._resolve_font_path()
         key = (path or "<default>", self.style.font_size)
-        if key not in self._font_cache:
-            if path:
-                self._font_cache[key] = ImageFont.truetype(path, self.style.font_size)
-            else:
-                # 日本語フォントが見つからない環境向けの最終手段(豆腐になる可能性)
-                self._font_cache[key] = ImageFont.load_default()
-        return self._font_cache[key]
+        if key in self._font_cache:
+            return self._font_cache[key]
+        font = None
+        # 指定パス → 候補パス の順で、実際に読めるものを採用(消える事故を防ぐ)
+        for p in ([path] if path else []) + _FONT_CANDIDATES:
+            if not p:
+                continue
+            try:
+                import os
+                if os.path.exists(p):
+                    font = ImageFont.truetype(p, self.style.font_size)
+                    break
+            except Exception:
+                continue
+        if font is None:
+            font = ImageFont.load_default()
+        self._font_cache[key] = font
+        return font
 
     def render(self, text: str) -> np.ndarray:
         """テキストを描画し RGBA(H,W,4) uint8 を返す(背景は透過)."""

@@ -43,6 +43,7 @@ class OscControl:
         self._sock.settimeout(0.3)
         self._stop = False
         self._color = list(style.color)
+        self._stroke = list(style.stroke_color)
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _apply(self, name, val):
@@ -67,12 +68,24 @@ class OscControl:
             s.margin_x = int(val)
         elif name == "Posy":
             s.margin_y = int(val)
+        elif name == "Fontpath":
+            s.font_path = val or None       # UIが実ファイルパスを直接指定
         elif name == "Font":
-            s.font_path = None if not val else _font_name_to_path(val)
+            # 旧: フォント名からの推測(Fontpath未使用のとき用)
+            if val:
+                p = _font_name_to_path(val)
+                if p:
+                    s.font_path = p
+        elif name == "Strokewidth":
+            s.stroke_width = int(val)
         elif name in ("Fontcolorr", "Fontcolorg", "Fontcolorb"):
             idx = {"Fontcolorr": 0, "Fontcolorg": 1, "Fontcolorb": 2}[name]
             self._color[idx] = int(max(0.0, min(1.0, float(val))) * 255)
             s.color = tuple(self._color)
+        elif name in ("Strokecolorr", "Strokecolorg", "Strokecolorb"):
+            idx = {"Strokecolorr": 0, "Strokecolorg": 1, "Strokecolorb": 2}[name]
+            self._stroke[idx] = int(max(0.0, min(1.0, float(val))) * 255)
+            s.stroke_color = tuple(self._stroke)
 
     def _loop(self):
         while not self._stop:
