@@ -63,6 +63,17 @@ rem 制御UI(別窓・状態表示つき。TD版と共通)
 python control_ui.py
 ```
 
+### 一括起動(バッチ)
+
+`start_heli_gst.bat` を **heli_gps 直下**(control_ui.py と同じ階層)に置いて
+ダブルクリックすると、送出本体と制御UIが同時に起動します。
+バッチ冒頭の変数(CHANNEL/MODE/KEYER/デバイス番号)を環境に合わせて調整してください。
+GStreamerのbinがPATHに無い場合は、同バッチ内の `GST_BIN` の2行のremを外して
+パスを設定します。
+
+送出本体はコンソール付き(`cmd /k`)で起動し、エラーや状態が見えます。
+本番で窓を出したくない場合は `cmd /k` を `cmd /c` に変更してください。
+
 ハード無しでロジックを確認するには:
 ```
 rem テスト音声を生成(1chのGPS音声。--channels 1 で読む)
