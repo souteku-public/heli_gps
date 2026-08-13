@@ -1,35 +1,34 @@
 @echo off
 rem ============================================================
-rem  ヘリGPSスーパー(GStreamer版) 本番送出 一括起動
-rem    - GStreamerのPATHを自動設定
-rem    - 送出本体(SDI入力→Fill&Key出力)を起動
-rem    - 制御UI(control_ui.py)を起動
-rem  heli_gps 直下(control_ui.py と同じ階層)に置いてダブルクリック。
+rem  Heli GPS super (GStreamer) - ON-AIR launcher
+rem    - set GStreamer PATH automatically
+rem    - start sender (SDI in -> Fill/Key out)
+rem    - start control UI (control_ui.py)
+rem  Place in heli_gps folder (same level as control_ui.py).
 rem ============================================================
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
-rem --- 設定(環境に合わせて変更) --------------------------------
-set "CHANNEL=2"          rem GPS音声ch(0始まり。EMBのCH3なら2)
-set "MODE=1080i5994"     rem 出力フォーマット(1080p2997等も可)
-set "KEYER=external"     rem external=Fill&Key / internal=本線合成 / off
+rem --- settings (edit for your site) ---
+set "CHANNEL=2"
+set "MODE=1080i5994"
+set "KEYER=external"
 set "INDEV=0"
 set "OUTDEV=0"
-set "EXTRA="            rem 追加オプション(例: set "EXTRA=--no-interlace")
-rem GStreamer bin の候補(先に見つかった方を使う)
+set "EXTRA="
 set "GST1=C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
 set "GST2=C:\gstreamer\1.0\msvc_x86_64\bin"
-rem -------------------------------------------------------------
+rem -------------------------------------
 
 call :setup_path || goto :err_gst
 where python >nul 2>&1 || goto :err_py
 
-echo 送出本体を起動します(コンソールにログ表示)...
+echo Starting sender (console shows logs)...
 start "HeliGPS Sender" cmd /k python -m gst_heli.app --source decklink --output decklink ^
     --osc-control --channel %CHANNEL% --mode %MODE% --keyer %KEYER% ^
     --in-device %INDEV% --out-device %OUTDEV% %EXTRA%
 
-echo 制御UIを起動します...
+echo Starting control UI...
 where pythonw >nul 2>&1 && ( start "" pythonw control_ui.py ) || ( start "" python control_ui.py )
 
 endlocal
@@ -42,12 +41,11 @@ if exist "%GST2%\gst-launch-1.0.exe" ( set "PATH=%GST2%;%PATH%" & exit /b 0 )
 exit /b 1
 
 :err_gst
-echo [エラー] GStreamer(gst-launch-1.0)が見つかりません。
-echo   Complete構成でインストールし、binのパスを GST1/GST2 に設定してください。
+echo [ERROR] GStreamer (gst-launch-1.0) not found. Install Complete and set GST1/GST2.
 pause
 exit /b 1
 
 :err_py
-echo [エラー] python が見つかりません。PythonをPATH付きでインストールしてください。
+echo [ERROR] python not found. Install Python and add it to PATH.
 pause
 exit /b 1
