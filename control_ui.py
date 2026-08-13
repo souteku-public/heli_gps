@@ -143,11 +143,12 @@ class ControlUI:
         self._menu(t1, "住所の粒度", ADDRLEVEL, "Addrlevel", 1)
         self._menu(t1, "ビットレート", BAUD, "Baud", 0)
         fr = ttk.Frame(t1); fr.pack(fill="x", pady=3)
-        ttk.Label(fr, text="GPS音声ch(0始)", width=16).pack(side="left")
-        self.audiochan = tk.IntVar(value=2)
-        ttk.Spinbox(fr, from_=0, to=15, textvariable=self.audiochan, width=6,
+        ttk.Label(fr, text="GPS音声ch(1-8)", width=16).pack(side="left")
+        # 表示は1始まり(CH1..CH8)。内部/OSCは0始まりに変換して送る。
+        self.audiochan = tk.IntVar(value=3)
+        ttk.Spinbox(fr, from_=1, to=16, textvariable=self.audiochan, width=6,
                     command=lambda: self.osc.send("/heli/ctrl/Audiochan",
-                                                  int(self.audiochan.get()))).pack(side="left")
+                                                  int(self.audiochan.get()) - 1)).pack(side="left")
         for label, ctrl, dflt in (("表示書式", "Textformat", "{address}上空"),
                                   ("受信途絶時の表示", "Staletext", "")):
             fr = ttk.Frame(t1); fr.pack(fill="x", pady=3)

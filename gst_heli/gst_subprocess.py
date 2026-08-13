@@ -94,11 +94,12 @@ class GstSubprocessBridge:
                  audio_port=5001, video_port=5002, gst_bin=None,
                  interlace=True, on_log=None,
                  preview=False, preview_width=960, preview_height=540,
-                 deinterlace=True, audio_debug=True):
+                 deinterlace=True, audio_debug=True, audio_timestamp=True):
         self.preview = preview
         self.preview_width, self.preview_height = preview_width, preview_height
         self.deinterlace = deinterlace
         self.audio_debug = audio_debug
+        self.audio_timestamp = audio_timestamp
         self.frame_provider = frame_provider
         self.on_audio = on_audio
         self.channels = channels
@@ -140,10 +141,10 @@ class GstSubprocessBridge:
                 self.on_audio(arr, self.channels)
                 # 診断: 2秒ごとに各chの最大レベルを表示(どのchにGPSがあるか/届いているか)
                 blk += 1
-                if self.audio_debug and blk % 20 == 0:
+                if self.audio_debug and blk % 10 == 0:   # 約1秒ごと
                     m = arr.reshape(-1, self.channels)
                     lv = np.abs(m).max(axis=0)
-                    self.on_log("[audio] ch levels: "
+                    self.on_log("[audio] ch levels(CH1..): "
                                 + " ".join(f"{x:.3f}" for x in lv))
 
     # ---- 映像送信: frame_provider()のBGRAを送り続ける(TCP背圧でペース調整) ----
@@ -169,10 +170,13 @@ class GstSubprocessBridge:
 
     # 音声取得のブランチ(音声には映像入力が必須なので decklinkvideosrc も動かす)
     def _audio_sink_branch(self):
+        dts = "true" if self.audio_timestamp else "false"
         return ["decklinkaudiosrc", f"device-number={self.in_device}",
-                "connection=embedded", f"channels={self.channels}", "do-timestamp=true", "!",
+                "connection=embedded", f"channels={self.channels}", f"do-timestamp={dts}", "!",
                 "audioconvert", "!",
                 f"audio/x-raw,format=S16LE,channels={self.channels},rate={self.rate}", "!",
+                "queue", "leaky=downstream", "max-size-buffers=0", "max-size-bytes=0",
+                "max-size-time=0", "!",
                 "tcpclientsink", "host=127.0.0.1", f"port={self.audio_port}"]
 
     def _video_in(self, sink):
