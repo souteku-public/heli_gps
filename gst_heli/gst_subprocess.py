@@ -148,16 +148,25 @@ class GstSubprocessBridge:
                 break
 
     def _build_cmd(self):
-        vcaps = (f"video/x-raw,format=BGRA,width={self.width},height={self.height},"
-                 f"framerate={self.framerate}"
-                 + (",interlace-mode=interleaved" if self.interlace else ""))
-        # rawvideoparse は input のフレームサイズを知る必要がある
+        # rawvideoparse がバイトストリームをフレームに切り出す(サイズ/レート指定)
         rvp = (f"rawvideoparse use-sink-caps=false format=bgra "
                f"width={self.width} height={self.height} framerate={self.framerate}")
+        # 映像(Pythonから) → Fill&Key出力 のブランチ
+        video_out = ["tcpclientsrc", "host=127.0.0.1", f"port={self.video_port}", "!",
+                     *rvp.split(), "!"]
+        if self.interlace:
+            # rawvideoparse はプログレッシブしか出さないため、1080i の sink 向けに
+            # interlace-mode を capssetter で上書き(変換ではなくメタ差し替え)。
+            video_out += ["capssetter", "join=true", "replace=true",
+                          "caps=video/x-raw,interlace-mode=interleaved", "!"]
+        video_out += ["videoconvert", "!",
+                      "decklinkvideosink", f"device-number={self.out_device}",
+                      f"mode={self.mode}", "video-format=8bit-bgra",
+                      f"keyer-mode={self.keyer}", "sync=false"]
         cmd = [
             self.gst, "-e",
             # 映像入力(音声のために必須)
-            f"decklinkvideosrc", f"device-number={self.in_device}",
+            "decklinkvideosrc", f"device-number={self.in_device}",
             f"connection={self.vconnection}", f"mode={self.vmode}", "!", "fakesink", "sync=false",
             # 音声入力 → TCP(Pythonへ)
             "decklinkaudiosrc", f"device-number={self.in_device}",
@@ -165,14 +174,7 @@ class GstSubprocessBridge:
             "audioconvert", "!",
             f"audio/x-raw,format=S16LE,channels={self.channels},rate={self.rate}", "!",
             "tcpclientsink", "host=127.0.0.1", f"port={self.audio_port}",
-            # 映像(Pythonから) → Fill&Key出力
-            "tcpclientsrc", "host=127.0.0.1", f"port={self.video_port}", "!",
-            *rvp.split(), "!", *vcaps.split(" "), "!",
-            "videoconvert", "!",
-            "decklinkvideosink", f"device-number={self.out_device}",
-            f"mode={self.mode}", "video-format=8bit-bgra",
-            f"keyer-mode={self.keyer}", "sync=false",
-        ]
+        ] + video_out
         return cmd
 
     def start(self):
