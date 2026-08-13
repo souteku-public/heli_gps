@@ -1,22 +1,19 @@
 @echo off
 rem ============================================================
-rem  ヘリGPSスーパー(GStreamer版) 本番送出 一括起動
+rem  ヘリGPSスーパー(GStreamer版) 見た目プレビュー 一括起動
 rem    - GStreamerのPATHを自動設定
-rem    - 送出本体(SDI入力→Fill&Key出力)を起動
+rem    - プレビュー(入力映像+テロップをPC窓に合成表示)を起動
 rem    - 制御UI(control_ui.py)を起動
-rem  heli_gps 直下(control_ui.py と同じ階層)に置いてダブルクリック。
+rem  ※SDI出力はしない(REF不要)。本番送出とは同時実行不可。
 rem ============================================================
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
-rem --- 設定(環境に合わせて変更) --------------------------------
-set "CHANNEL=2"          rem GPS音声ch(0始まり。EMBのCH3なら2)
-set "MODE=1080i5994"     rem 出力フォーマット(1080p2997等も可)
-set "KEYER=external"     rem external=Fill&Key / internal=本線合成 / off
+rem --- 設定 ----------------------------------------------------
+set "CHANNEL=2"
 set "INDEV=0"
-set "OUTDEV=0"
-set "EXTRA="            rem 追加オプション(例: set "EXTRA=--no-interlace")
-rem GStreamer bin の候補(先に見つかった方を使う)
+set "PW=960"
+set "PH=540"
 set "GST1=C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
 set "GST2=C:\gstreamer\1.0\msvc_x86_64\bin"
 rem -------------------------------------------------------------
@@ -24,10 +21,10 @@ rem -------------------------------------------------------------
 call :setup_path || goto :err_gst
 where python >nul 2>&1 || goto :err_py
 
-echo 送出本体を起動します(コンソールにログ表示)...
-start "HeliGPS Sender" cmd /k python -m gst_heli.app --source decklink --output decklink ^
-    --osc-control --channel %CHANNEL% --mode %MODE% --keyer %KEYER% ^
-    --in-device %INDEV% --out-device %OUTDEV% %EXTRA%
+echo プレビューを起動します(入力映像にテロップを重ねてPC窓に表示)...
+start "HeliGPS Preview" cmd /k python -m gst_heli.preview ^
+    --osc-control --channel %CHANNEL% --in-device %INDEV% ^
+    --preview-width %PW% --preview-height %PH%
 
 echo 制御UIを起動します...
 where pythonw >nul 2>&1 && ( start "" pythonw control_ui.py ) || ( start "" python control_ui.py )

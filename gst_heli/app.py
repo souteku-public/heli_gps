@@ -151,7 +151,11 @@ class StatusSender:
             pass
 
 
-def run(args):
+def make_engine(args):
+    """復調・住所・描画・OSC制御をまとめて用意し、current_frame等を返す.
+
+    本番送出(app)とプレビュー(preview)で共有する。
+    """
     cfg = HeliConfig(fs=args.rate, baud=args.baud, channel=args.channel,
                      geo_mode=args.geo_mode, addr_level=args.addr_level)
     style = SuperStyle(font_size=args.font_size)
@@ -159,8 +163,6 @@ def run(args):
     renderer = SuperRenderer(args.width, args.height, style)
     status = StatusSender(args.status_host, args.status_port)
     ctrl = OscControl(cfg, style, args.ctrl_port) if args.osc_control else None
-
-    # レンダリングのキャッシュ(テキスト変化時のみ再描画)
     cache = {"text": None, "frame": np.zeros((args.height, args.width, 4), np.uint8)}
 
     def current_frame():
@@ -170,6 +172,15 @@ def run(args):
             cache["frame"] = renderer.render(text)
             status.send(decoder, text)
         return cache["frame"]
+
+    return dict(cfg=cfg, style=style, decoder=decoder, renderer=renderer,
+                status=status, ctrl=ctrl, cache=cache, current_frame=current_frame)
+
+
+def run(args):
+    eng = make_engine(args)
+    decoder, renderer = eng["decoder"], eng["renderer"]
+    ctrl, cache, current_frame = eng["ctrl"], eng["cache"], eng["current_frame"]
 
     # ---- ファイル(WAV)モードはハード不要 ----
     if args.source == "wav":

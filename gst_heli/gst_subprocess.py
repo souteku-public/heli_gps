@@ -92,7 +92,12 @@ class GstSubprocessBridge:
                  framerate="30000/1001", keyer="external",
                  vconnection="sdi", vmode="auto",
                  audio_port=5001, video_port=5002, gst_bin=None,
-                 interlace=True, on_log=None):
+                 interlace=True, on_log=None,
+                 preview=False, preview_width=960, preview_height=540,
+                 deinterlace=True):
+        self.preview = preview
+        self.preview_width, self.preview_height = preview_width, preview_height
+        self.deinterlace = deinterlace
         self.frame_provider = frame_provider
         self.on_audio = on_audio
         self.channels = channels
@@ -148,12 +153,44 @@ class GstSubprocessBridge:
                 break
 
     def _build_cmd(self):
-        # rawvideoparse がバイトストリームをフレームに切り出す(サイズ/レート指定)
-        rvp = (f"rawvideoparse use-sink-caps=false format=bgra "
-               f"width={self.width} height={self.height} framerate={self.framerate}")
+        if self.preview:
+            return self._build_cmd_preview()
+        return self._build_cmd_output()
+
+    # 入力音声のブランチ(音声取得には映像入力が必須なので decklinkvideosrc も動かす)
+    def _audio_branch(self, video_to="fakesink"):
+        vsrc = ["decklinkvideosrc", f"device-number={self.in_device}",
+                f"connection={self.vconnection}", f"mode={self.vmode}", "!"]
+        vsrc += (["deinterlace", "!"] if (self.preview and self.deinterlace) else [])
+        # プレビューでは映像を compositor へ、本番出力では fakesink へ
+        vsrc += (["videoconvert", "!", "video/x-raw,format=BGRA", "!", "comp.sink_0"]
+                 if self.preview else ["fakesink", "sync=false"])
+        asrc = ["decklinkaudiosrc", f"device-number={self.in_device}",
+                "connection=embedded", f"channels={self.channels}", "do-timestamp=true", "!",
+                "audioconvert", "!",
+                f"audio/x-raw,format=S16LE,channels={self.channels},rate={self.rate}", "!",
+                "tcpclientsink", "host=127.0.0.1", f"port={self.audio_port}"]
+        return vsrc, asrc
+
+    def _telop_src(self):
+        # Pythonから来る BGRA テロップ(TCP) をフレームに切り出す
+        return ["tcpclientsrc", "host=127.0.0.1", f"port={self.video_port}", "!",
+                "rawvideoparse", "use-sink-caps=false", "format=bgra",
+                f"width={self.width}", f"height={self.height}", f"framerate={self.framerate}", "!"]
+
+    def _build_cmd_preview(self):
+        # 入力映像 + テロップ を compositor で合成し、PC窓(autovideosink)へ表示
+        vsrc, asrc = self._audio_branch()
+        telop = self._telop_src() + ["comp.sink_1"]
+        comp = ["compositor", "name=comp", "background=black", "!",
+                "videoconvert", "!", "videoscale", "!",
+                f"video/x-raw,width={self.preview_width},height={self.preview_height}", "!",
+                "autovideosink", "sync=false"]
+        return [self.gst, "-e"] + vsrc + telop + comp + asrc
+
+    def _build_cmd_output(self):
         # 映像(Pythonから) → Fill&Key出力 のブランチ
-        video_out = ["tcpclientsrc", "host=127.0.0.1", f"port={self.video_port}", "!",
-                     *rvp.split(), "!"]
+        video_out = list(self._telop_src())
         if self.interlace:
             # rawvideoparse はプログレッシブしか出さないため、1080i の sink 向けに
             # capssetter(join=false=完全置換)で interlace-mode を interleaved に
@@ -168,19 +205,8 @@ class GstSubprocessBridge:
                       "decklinkvideosink", f"device-number={self.out_device}",
                       f"mode={self.mode}", "video-format=8bit-bgra",
                       f"keyer-mode={self.keyer}"]
-        cmd = [
-            self.gst, "-e",
-            # 映像入力(音声のために必須)
-            "decklinkvideosrc", f"device-number={self.in_device}",
-            f"connection={self.vconnection}", f"mode={self.vmode}", "!", "fakesink", "sync=false",
-            # 音声入力 → TCP(Pythonへ)
-            "decklinkaudiosrc", f"device-number={self.in_device}",
-            "connection=embedded", f"channels={self.channels}", "do-timestamp=true", "!",
-            "audioconvert", "!",
-            f"audio/x-raw,format=S16LE,channels={self.channels},rate={self.rate}", "!",
-            "tcpclientsink", "host=127.0.0.1", f"port={self.audio_port}",
-        ] + video_out
-        return cmd
+        vsrc, asrc = self._audio_branch()
+        return [self.gst, "-e"] + vsrc + asrc + video_out
 
     def start(self):
         # サーバを先に立ててから gst を起動(接続先が居る状態にする)

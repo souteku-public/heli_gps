@@ -74,11 +74,23 @@ python -m gst_heli.outtest --text "テスト 千葉県君津市上空"
 ```
 → **SDI OUT 1=Fill / 2=Key** に文字が出れば出力OK（Ctrl+Cで終了）。
 
+### 手順B'. 見た目プレビュー（PC画面で確認）
+SDI出力せず、**入力SDI映像にテロップを重ねたものをPCのウィンドウに表示**する。
+REF不要。制御UIで見た目を追い込むのに使う:
+```
+python -m gst_heli.preview --osc-control --channel 2
+python control_ui.py
+```
+または `start_heli_preview.bat` をダブルクリック。
+※SDIデバイスは1プロセスしか入力を開けないため、**本番送出(手順C)とは
+  同時に実行できない**（プレビューで詰めてから本番へ）。
+
 ### 手順C. 本番（入力+出力 同時）
 ```
 python -m gst_heli.app --source decklink --output decklink --osc-control --channel 2
 python control_ui.py
 ```
+または `start_heli_gst.bat` をダブルクリック。
 → 実ヘリGPS音声から住所テロップをFill&Key出力しつつ、制御UIで見た目を調整。
 
 ---
