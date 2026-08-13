@@ -200,8 +200,11 @@ class GstSubprocessBridge:
         # テロップ: 窓サイズにスケール → compositor sink_1(アルファ合成で上に乗る)
         telop = (self._telop_src()
                  + ["videoscale", "!", "videoconvert", "!", scale_caps, "!", "comp.sink_1"])
+        # compositor の出力サイズを明示(pw×ph)。これで sink のウィンドウが
+        # 最初のフレームから所望サイズで作られる(小窓化・タイトルバーのみ回避)。
+        out_caps = f"video/x-raw,width={pw},height={ph}"
         comp = ["compositor", "name=comp", "background=black", "!",
-                "videoconvert", "!", "autovideosink", "sync=false"]
+                out_caps, "!", "videoconvert", "!", "autovideosink", "sync=false"]
         return [self.gst, "-e"] + vin + telop + comp + self._audio_sink_branch()
 
     def _build_cmd_output(self):

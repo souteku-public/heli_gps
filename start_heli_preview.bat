@@ -14,8 +14,9 @@ rem --- settings ---
 set "CHANNEL=2"
 set "INDEV=0"
 set "VMODE=1080i5994"
-set "PW=1280"
-set "PH=720"
+rem PW/PH = preview window size in px. 0 = auto (about 1/9 of the screen).
+set "PW=0"
+set "PH=0"
 set "GST1=C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
 set "GST2=C:\gstreamer\1.0\msvc_x86_64\bin"
 rem ----------------

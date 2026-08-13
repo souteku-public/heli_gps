@@ -34,9 +34,13 @@ from .renderer import SuperRenderer, SuperStyle
 class OscControl:
     """control_ui.py からの /heli/ctrl/* を受けて cfg/style を更新."""
 
-    def __init__(self, cfg: HeliConfig, style: SuperStyle, port: int = 9001):
+    def __init__(self, cfg: HeliConfig, style: SuperStyle, port: int = 9001,
+                 on_change=None):
         self.cfg = cfg
         self.style = style
+        # 見た目・住所設定が変わったら呼ぶ(描画キャッシュ破棄の合図)。
+        # これが無いと、文字列が変わるまで新しい見た目が反映されない。
+        self.on_change = on_change
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind(("0.0.0.0", port))
@@ -99,6 +103,8 @@ class OscControl:
             if addr.startswith("/heli/ctrl/") and args:
                 try:
                     self._apply(addr.rsplit("/", 1)[-1], args[0])
+                    if self.on_change:
+                        self.on_change()   # 次フレームで即再描画させる
                 except Exception:
                     pass
 
@@ -176,13 +182,24 @@ def make_engine(args):
     decoder = HeliDecoder(cfg)
     renderer = SuperRenderer(args.width, args.height, style)
     status = StatusSender(args.status_host, args.status_port)
-    ctrl = OscControl(cfg, style, args.ctrl_port) if args.osc_control else None
-    cache = {"text": None, "frame": np.zeros((args.height, args.width, 4), np.uint8)}
+    cache = {"text": None, "frame": np.zeros((args.height, args.width, 4), np.uint8),
+             "style_ver": 0, "drawn_ver": -1}
+
+    def mark_dirty():
+        # 見た目/住所設定が変わった。バージョンを進めて次フレームで再描画。
+        cache["style_ver"] += 1
+
+    ctrl = (OscControl(cfg, style, args.ctrl_port, on_change=mark_dirty)
+            if args.osc_control else None)
 
     def current_frame():
         text = decoder.current_text()
-        if text != cache["text"]:
+        ver = cache["style_ver"]
+        # 文字が変わった時 or 見た目設定が変わった時に再描画。
+        # 後者が無いと「決定」を押しても位置が変わるまで反映されなかった。
+        if text != cache["text"] or ver != cache["drawn_ver"]:
             cache["text"] = text
+            cache["drawn_ver"] = ver
             cache["frame"] = renderer.render(text)
         # 位置・状態は受信中は定期的に送る(StatusSender側で間引き)。
         # 住所文字が安定しても control_ui が途絶表示にならないようにするため。
