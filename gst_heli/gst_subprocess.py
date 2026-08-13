@@ -94,10 +94,11 @@ class GstSubprocessBridge:
                  audio_port=5001, video_port=5002, gst_bin=None,
                  interlace=True, on_log=None,
                  preview=False, preview_width=960, preview_height=540,
-                 deinterlace=True):
+                 deinterlace=True, audio_debug=True):
         self.preview = preview
         self.preview_width, self.preview_height = preview_width, preview_height
         self.deinterlace = deinterlace
+        self.audio_debug = audio_debug
         self.frame_provider = frame_provider
         self.on_audio = on_audio
         self.channels = channels
@@ -123,6 +124,8 @@ class GstSubprocessBridge:
         chunk_sets = self.rate // 10               # 100ms
         want = bytes_per_set * chunk_sets
         buf = b""
+        blk = 0
+        self.on_log(f"[audio] TCP接続(port {self.audio_port})。音声受信を開始")
         while not stopped():
             try:
                 data = conn.recv(65536)
@@ -135,6 +138,13 @@ class GstSubprocessBridge:
                 block, buf = buf[:want], buf[want:]
                 arr = np.frombuffer(block, dtype="<i2").astype(np.float64) / 32768.0
                 self.on_audio(arr, self.channels)
+                # 診断: 2秒ごとに各chの最大レベルを表示(どのchにGPSがあるか/届いているか)
+                blk += 1
+                if self.audio_debug and blk % 20 == 0:
+                    m = arr.reshape(-1, self.channels)
+                    lv = np.abs(m).max(axis=0)
+                    self.on_log("[audio] ch levels: "
+                                + " ".join(f"{x:.3f}" for x in lv))
 
     # ---- 映像送信: frame_provider()のBGRAを送り続ける(TCP背圧でペース調整) ----
     def _video_handler(self, conn, stopped):
