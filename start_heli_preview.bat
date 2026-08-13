@@ -14,8 +14,8 @@ rem --- settings ---
 set "CHANNEL=2"
 set "INDEV=0"
 set "VMODE=1080i5994"
-set "PW=960"
-set "PH=540"
+set "PW=1280"
+set "PH=720"
 set "GST1=C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
 set "GST2=C:\gstreamer\1.0\msvc_x86_64\bin"
 rem ----------------

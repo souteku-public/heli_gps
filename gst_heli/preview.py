@@ -25,8 +25,10 @@ from .gst_subprocess import GstSubprocessBridge
 
 def main():
     ap = build_parser()
-    ap.add_argument("--preview-width", type=int, default=960)
-    ap.add_argument("--preview-height", type=int, default=540)
+    # 既定を 1280x720 に(小さすぎて操作しにくいという指摘への対応)。
+    # ウィンドウはドラッグでリサイズ可能(--preview-width/height で初期サイズ変更)。
+    ap.add_argument("--preview-width", type=int, default=1280)
+    ap.add_argument("--preview-height", type=int, default=720)
     ap.add_argument("--sample-text", default="○○県○○市上空",
                     help="GPS未受信時に表示するサンプル文字(見た目確認用)")
     ap.add_argument("--no-audio-timestamp", action="store_true",

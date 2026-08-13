@@ -124,18 +124,32 @@ def _font_name_to_path(name: str):
 
 
 class StatusSender:
-    """control_ui へ状態を送る(復調時 ~1回/秒)."""
+    """control_ui へ状態を送る.
 
-    def __init__(self, host="127.0.0.1", port=9002):
+    位置(/heli/position)と測位状態(/heli/status)は住所文字が変わらなくても
+    受信が続く限り定期的(既定 0.5秒ごと)に送り続ける。こうしないと
+    control_ui 側が「受信途絶」表示になり、緯度経度もフリーズしてしまう。
+    スーパー文字(/heli/super)は変化したときだけ送る。
+    """
+
+    def __init__(self, host="127.0.0.1", port=9002, interval_s: float = 0.5):
         try:
             self._osc = OscSender(host, port)
         except Exception:
             self._osc = None
         self._last_text = None
+        self._interval = interval_s
+        self._last_send = 0.0
 
     def send(self, decoder: HeliDecoder, text: str):
         if self._osc is None:
             return
+        now = time.monotonic()
+        text_changed = text != self._last_text
+        # 文字が変わらない間引き送信(受信途絶表示・座標フリーズを防ぐ)
+        if not text_changed and (now - self._last_send) < self._interval:
+            return
+        self._last_send = now
         st = decoder.status()
         try:
             if st["lat"] is not None:
@@ -144,7 +158,7 @@ class StatusSender:
                 self._osc.send_raw("/heli/status", int(st["fix"] or 0),
                                    int(st["sats"] if st["sats"] is not None else -1),
                                    "01")
-            if text != self._last_text:
+            if text_changed:
                 self._last_text = text
                 self._osc.send_raw("/heli/super", text)
         except Exception:
@@ -170,7 +184,9 @@ def make_engine(args):
         if text != cache["text"]:
             cache["text"] = text
             cache["frame"] = renderer.render(text)
-            status.send(decoder, text)
+        # 位置・状態は受信中は定期的に送る(StatusSender側で間引き)。
+        # 住所文字が安定しても control_ui が途絶表示にならないようにするため。
+        status.send(decoder, text)
         return cache["frame"]
 
     return dict(cfg=cfg, style=style, decoder=decoder, renderer=renderer,

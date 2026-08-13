@@ -95,13 +95,17 @@ class ControlUI:
         self.font_size = 90
         self.super_text = "(プレビュー)"
         self.pos = [480, 900]        # フレーム座標(左上, px)
+        # 見た目・配置の変更は「決定」ボタンを押すまで送らずに溜めておく。
+        # (address:args の辞書。同じ宛先は最新値で上書き)
+        self._pending: dict = {}
         root.title("ヘリGPS スーパー制御")
-        root.geometry("560x820")
+        root.geometry("560x880")
         self._build()
-        # 初期値を送信(align=左上・絶対座標方式に固定)
+        # 初期値を送信(align=左上・絶対座標方式に固定)。基準値なので即送信。
         self.osc.send("/heli/ctrl/Alignx", "left")
         self.osc.send("/heli/ctrl/Aligny", "top")
-        self._send_pos()
+        self.osc.send("/heli/ctrl/Posx", float(self.pos[0]))
+        self.osc.send("/heli/ctrl/Posy", float(self.pos[1]))
         self._poll()
 
     # ---------- ウィジェット生成補助 ----------
@@ -126,7 +130,7 @@ class ControlUI:
 
         def on_move(_v):
             v = val.get(); vlab.config(text=f"{v:.0f}")
-            self.osc.send(f"/heli/ctrl/{ctrl_name}", int(v))
+            self._stage(f"/heli/ctrl/{ctrl_name}", int(v))
             if on_extra:
                 on_extra(v)
         ttk.Scale(fr, from_=lo, to=hi, variable=val, command=on_move).pack(
@@ -190,6 +194,16 @@ class ControlUI:
                                        dy * (10 if e.state & 1 else 1)))
         self._redraw_canvas()
 
+        # === 決定(反映)ボタン ===
+        # 見た目・配置(フォント/文字サイズ/色/フチ/位置)の変更は、ここを押す
+        # まで送出側に反映しない。誤操作で本番のスーパーが即変わるのを防ぐ。
+        ap = ttk.Frame(self.root); ap.pack(fill="x", padx=6, pady=(0, 2))
+        self.apply_btn = ttk.Button(ap, text="決定（反映）", state="disabled",
+                                    command=self._apply_pending)
+        self.apply_btn.pack(side="left", fill="x", expand=True)
+        ttk.Label(ap, text="見た目・配置は決定で反映",
+                  foreground="#666").pack(side="left", padx=6)
+
         # === 状態表示 ===
         st = ttk.LabelFrame(self.root, text="受信状態"); st.pack(fill="x", padx=6, pady=6)
         self.recv_lbl = tk.Label(st, text="● 未受信", fg="white", bg="gray",
@@ -224,13 +238,34 @@ class ControlUI:
         self.stroke_sw.pack(side="left", padx=4)
         ttk.Button(fr2, text="選ぶ", width=5, command=self._pick_stroke).pack(side="left")
 
+    # ---------- 変更の一時保留と「決定」での反映 ----------
+    def _stage(self, address, *args):
+        """見た目・配置の変更を溜める(決定ボタンで一括反映)."""
+        self._pending[address] = args
+        self._mark_dirty()
+
+    def _mark_dirty(self):
+        n = len(self._pending)
+        if hasattr(self, "apply_btn"):
+            if n:
+                self.apply_btn.config(text=f"決定（反映）  未反映 {n} 件", state="normal")
+            else:
+                self.apply_btn.config(text="決定（反映）", state="disabled")
+
+    def _apply_pending(self):
+        """溜めた見た目・配置の変更をまとめて送信(反映)."""
+        for address, args in self._pending.items():
+            self.osc.send(address, *args)
+        self._pending.clear()
+        self._mark_dirty()
+
     # ---------- コールバック ----------
     def _on_font(self, _e=None):
         name = self.font_var.get()
         path = self._font_lut.get(name, "")
         if path:
-            self.osc.send("/heli/ctrl/Fontpath", path)   # gst: 実ファイル指定
-        self.osc.send("/heli/ctrl/Font", name)           # TD: フォント名
+            self._stage("/heli/ctrl/Fontpath", path)   # gst: 実ファイル指定
+        self._stage("/heli/ctrl/Font", name)           # TD: フォント名
 
     def _on_size(self, v):
         self.font_size = int(v); self._redraw_canvas()
@@ -240,9 +275,9 @@ class ControlUI:
         if rgb is None:
             return
         self.fill = tuple(c / 255 for c in rgb); self.fill_sw.config(bg=hx)
-        self.osc.send("/heli/ctrl/Fontcolorr", float(self.fill[0]))
-        self.osc.send("/heli/ctrl/Fontcolorg", float(self.fill[1]))
-        self.osc.send("/heli/ctrl/Fontcolorb", float(self.fill[2]))
+        self._stage("/heli/ctrl/Fontcolorr", float(self.fill[0]))
+        self._stage("/heli/ctrl/Fontcolorg", float(self.fill[1]))
+        self._stage("/heli/ctrl/Fontcolorb", float(self.fill[2]))
         self._redraw_canvas()
 
     def _pick_stroke(self):
@@ -250,9 +285,9 @@ class ControlUI:
         if rgb is None:
             return
         self.stroke = tuple(c / 255 for c in rgb); self.stroke_sw.config(bg=hx)
-        self.osc.send("/heli/ctrl/Strokecolorr", float(self.stroke[0]))
-        self.osc.send("/heli/ctrl/Strokecolorg", float(self.stroke[1]))
-        self.osc.send("/heli/ctrl/Strokecolorb", float(self.stroke[2]))
+        self._stage("/heli/ctrl/Strokecolorr", float(self.stroke[0]))
+        self._stage("/heli/ctrl/Strokecolorg", float(self.stroke[1]))
+        self._stage("/heli/ctrl/Strokecolorb", float(self.stroke[2]))
         self._redraw_canvas()
 
     # ---------- 配置(ドラッグ) ----------
@@ -274,8 +309,8 @@ class ControlUI:
         self._redraw_canvas(); self._send_pos()
 
     def _send_pos(self):
-        self.osc.send("/heli/ctrl/Posx", float(self.pos[0]))
-        self.osc.send("/heli/ctrl/Posy", float(self.pos[1]))
+        self._stage("/heli/ctrl/Posx", float(self.pos[0]))
+        self._stage("/heli/ctrl/Posy", float(self.pos[1]))
 
     def _redraw_canvas(self):
         cx, cy = self.pos[0] / SCALE, self.pos[1] / SCALE
