@@ -52,6 +52,33 @@ gst-launch-1.0 videotestsrc ! video/x-raw,format=BGRA,width=1920,height=1080 ! v
 
 デバイス一覧は `gst-device-monitor-1.0` で確認できる。
 
+## バックエンド: PyGObject不要(既定) / PyGObject
+
+- **subprocess(既定・推奨)**: `gst-launch-1.0` をサブプロセスとして起動し、
+  音声/映像を localhost TCP でやり取りする。**PyGObjectのインストール不要**で、
+  GStreamer本体だけあれば動く。Windows配布が容易
+- **gi**: PyGObject(`import gi`)を使う方式。`--backend gi` で選択
+
+`decklink`の音声取得には映像入力(decklinkvideosrc)の同時起動が必須
+(実機で確認済み)。subprocess方式のパイプラインはこれを内蔵している。
+
+## 段階的な立ち上げ(実機)
+
+いきなり本番アプリを動かす前に、経路を分けて確認すると安全です。
+
+1. **音声→復調**(gst-launchのみ。前掲):
+   `decklinkvideosrc ! fakesink` と `decklinkaudiosrc ! … wavenc ! filesink` で
+   録音 → `python -m nnn_decoder.cli cap.wav --channel 3 --address`
+2. **映像出力(Fill&Key)**: 実際のテロップ静止画をPythonが供給する単体テスト:
+   ```
+   python -m gst_heli.outtest --text "テスト 千葉県君津市上空"
+   ```
+   REF接続で SDI OUT 1=Fill / 2=Key を確認(Ctrl+Cで終了)
+3. **本番(入力+出力 同時)**:
+   ```
+   python -m gst_heli.app --source decklink --output decklink --osc-control --channel 2
+   ```
+
 ## 実行
 
 ```

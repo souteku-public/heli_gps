@@ -171,20 +171,42 @@ def run(args):
             status.send(decoder, text)
         return cache["frame"]
 
-    # ---- 出力 ----
-    if args.output == "decklink":
-        from .gst_io import DecklinkFillKeyOut, main_loop
+    # ---- ファイル(WAV)モードはハード不要 ----
+    if args.source == "wav":
+        _run_file_mode(args, decoder, renderer, current_frame, cache)
+        if ctrl:
+            ctrl.close()
+        decoder.close()
+        return
+
+    # ---- 実機(decklink) ----
+    if args.backend == "subprocess":
+        # PyGObject不要: gst-launchサブプロセス + TCP
+        from .gst_subprocess import GstSubprocessBridge
+        bridge = GstSubprocessBridge(
+            current_frame,
+            lambda arr, n: decoder.feed_interleaved(arr, n),
+            in_device=args.in_device, out_device=args.out_device,
+            channels=args.channels, rate=int(args.rate),
+            width=args.width, height=args.height, mode=args.mode,
+            keyer=args.keyer, vconnection=args.vconnection, vmode=args.vmode,
+            audio_port=args.audio_port, video_port=args.video_port,
+            gst_bin=args.gst_bin, interlace=not args.no_interlace)
+        bridge.start()
+        try:
+            bridge.wait()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            bridge.stop()
+    else:
+        # PyGObject(gi)方式
+        from .gst_io import DecklinkFillKeyOut, DecklinkAudioIn, main_loop
         out = DecklinkFillKeyOut(current_frame, device_number=args.out_device,
                                  mode=args.mode, width=args.width, height=args.height,
-                                 keyer=args.keyer)
-        out.start()
-    else:
-        out = None
-
-    # ---- 音源 ----
-    stop_flag = {"stop": False}
-    if args.source == "decklink":
-        from .gst_io import DecklinkAudioIn, main_loop
+                                 keyer=args.keyer) if args.output == "decklink" else None
+        if out:
+            out.start()
         audio = DecklinkAudioIn(device_number=args.in_device, channels=args.channels,
                                 rate=int(args.rate),
                                 on_samples=lambda arr, n: decoder.feed_interleaved(arr, n))
@@ -198,9 +220,6 @@ def run(args):
             audio.stop()
             if out:
                 out.stop()
-    else:
-        # WAV/ファイル: 実時間で少しずつ投入し、プレビューPNGを書き出す
-        _run_file_mode(args, decoder, renderer, current_frame, cache)
 
     if ctrl:
         ctrl.close()
@@ -262,10 +281,20 @@ def build_parser():
 
     ap.add_argument("--width", type=int, default=1920)
     ap.add_argument("--height", type=int, default=1080)
-    ap.add_argument("--mode", default="1080i5994", help="decklink 信号フォーマット")
+    ap.add_argument("--mode", default="1080i5994", help="出力 信号フォーマット")
     ap.add_argument("--keyer", default="external", choices=["external", "internal", "off"])
     ap.add_argument("--in-device", type=int, default=0)
     ap.add_argument("--out-device", type=int, default=0)
+    # backend / subprocess方式のオプション
+    ap.add_argument("--backend", choices=["subprocess", "gi"], default="subprocess",
+                    help="subprocess=gst-launch(PyGObject不要,既定) / gi=PyGObject")
+    ap.add_argument("--vconnection", default="sdi", help="映像入力コネクション(音声取得に必須)")
+    ap.add_argument("--vmode", default="auto", help="映像入力mode(auto=自動検出)")
+    ap.add_argument("--audio-port", type=int, default=5001)
+    ap.add_argument("--video-port", type=int, default=5002)
+    ap.add_argument("--gst-bin", default=None, help="gst-launch-1.0のパス(未指定は自動探索)")
+    ap.add_argument("--no-interlace", action="store_true",
+                    help="出力caps に interlace-mode=interleaved を付けない")
 
     ap.add_argument("--osc-control", action="store_true", help="control_ui からの操作を受ける")
     ap.add_argument("--ctrl-port", type=int, default=9001)
