@@ -122,11 +122,16 @@ touchdesigner/  SDI入力→住所テロップ→1080i Fill&Key出力 の連携�
 tests/          変調→復調ラウンドトリップ試験(雑音・分割・破損フレーム含む)
 ```
 
-## SDIテロップ送出 (UltraStudio + TouchDesigner)
+## SDIテロップ送出 (UltraStudio → 1080i Fill&Key)
 
 UltraStudioのSDI入力(EMB音声)からGPSを復調し、市区町村テロップを
-1080iのFill&KeyでSDI出力する構成は `touchdesigner/README_TD.md` を
-参照してください。フォント・文字位置はTouchDesignerのUI上で調整できます。
+1080iのFill&KeyでSDI出力する。2通りの構成があります。
+
+- **GStreamer版（TouchDesigner不要・推奨）**: `gst_heli/README_GST.md`。
+  Python + GStreamer(LGPL) + Desktop Video のみ。PyGObject不要
+  （gst-launchをサブプロセス使用）。実機で入出力とも検証済み。
+  制御は `control_ui.py`（フォント/中・フチ2色/太さ/ドラッグ配置）
+- **TouchDesigner版**: `touchdesigner/README_TD.md`。TD上でテロップを描画・出力
 
 ## 住所変換の仕様
 
