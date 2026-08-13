@@ -110,8 +110,9 @@ class ControlUI:
         self.font_size = int(saved.get("font_size", 90))
         self._init_stroke_width = int(saved.get("stroke_width", 5))
         self._init_font_name = saved.get("font_name", "")
+        self.align_x = saved.get("align_x", "left")     # left/center/right
         self.super_text = "(プレビュー)"
-        self.pos = list(saved.get("pos", [480, 900]))   # フレーム座標(左上, px)
+        self.pos = list(saved.get("pos", [480, 900]))   # フレーム座標(基準点, px)
         # 見た目・配置の変更は「決定」ボタンを押すまで送らずに溜めておく。
         # (address:args の辞書。同じ宛先は最新値で上書き)
         self._pending: dict = {}
@@ -123,8 +124,7 @@ class ControlUI:
         if self._init_font_name and self._init_font_name in self._font_lut:
             self.font_var.set(self._init_font_name)
         # 起動時に現在のUI状態(保存値があればそれ)を送出側へ流し込む。
-        # align は左上・絶対座標に固定。見た目/位置は基準値なので即送信。
-        self.osc.send("/heli/ctrl/Alignx", "left")
+        # 縦は上端・絶対座標に固定。横揃え(align_x)は見た目で選べる。
         self.osc.send("/heli/ctrl/Aligny", "top")
         self._broadcast_look()
         self._poll()
@@ -236,9 +236,28 @@ class ControlUI:
         self._build_font(s)
         self.size_var = self._slider(s, "文字サイズ", "Fontsize", 20, 250, self.font_size,
                                      on_extra=self._on_size)
+        self._build_align(s)
         self._build_colors(s)
         self.stroke_var = self._slider(s, "フチの太さ", "Strokewidth", 0, 20,
                                        self._init_stroke_width)
+
+    def _build_align(self, parent):
+        fr = ttk.Frame(parent); fr.pack(fill="x", pady=3)
+        ttk.Label(fr, text="文字揃え", width=16).pack(side="left")
+        # 基準点(ドラッグ位置)に対して、左寄せ=右へ伸びる/右寄せ=左へ伸びる
+        self._align_lut = {"左寄せ": "left", "中央": "center", "右寄せ": "right"}
+        rev = {v: k for k, v in self._align_lut.items()}
+        self.align_var = tk.StringVar(value=rev.get(self.align_x, "左寄せ"))
+        cb = ttk.Combobox(fr, textvariable=self.align_var,
+                          values=list(self._align_lut), state="readonly", width=10)
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>",
+                lambda _e: self._on_align(self._align_lut[self.align_var.get()]))
+
+    def _on_align(self, ax):
+        self.align_x = ax
+        self._stage("/heli/ctrl/Alignx", ax)
+        self._redraw_canvas()
 
     def _build_place(self, parent):
         s = self._section(parent, "配置")
@@ -340,6 +359,7 @@ class ControlUI:
             self.osc.send("/heli/ctrl/Font", name)
         self.osc.send("/heli/ctrl/Fontsize", int(self.size_var.get()))
         self.osc.send("/heli/ctrl/Strokewidth", int(self.stroke_var.get()))
+        self.osc.send("/heli/ctrl/Alignx", self.align_x)
         for comp, ch in (("r", 0), ("g", 1), ("b", 2)):
             self.osc.send(f"/heli/ctrl/Fontcolor{comp}", float(self.fill[ch]))
             self.osc.send(f"/heli/ctrl/Strokecolor{comp}", float(self.stroke[ch]))
@@ -350,6 +370,7 @@ class ControlUI:
         return {
             "font_name": self.font_var.get(),
             "font_size": int(self.size_var.get()),
+            "align_x": self.align_x,
             "fill": list(self.fill),
             "stroke": list(self.stroke),
             "stroke_width": int(self.stroke_var.get()),
@@ -424,8 +445,12 @@ class ControlUI:
         csize = max(6, int(self.font_size / SCALE))
         font = ("", csize, "bold")
         txt = self.super_text or "(プレビュー)"
-        self.canvas.itemconfig(self.txt_item, text=txt, fill=_hex(self.fill), font=font)
-        self.canvas.itemconfig(self.txt_shadow, text=txt, fill=_hex(self.stroke), font=font)
+        # 横揃えに合わせてアンカーを変える(左寄せ=左端基準/右寄せ=右端基準)
+        anchor = {"left": "nw", "center": "n", "right": "ne"}.get(self.align_x, "nw")
+        self.canvas.itemconfig(self.txt_item, text=txt, fill=_hex(self.fill),
+                               font=font, anchor=anchor)
+        self.canvas.itemconfig(self.txt_shadow, text=txt, fill=_hex(self.stroke),
+                               font=font, anchor=anchor)
         self.canvas.coords(self.txt_item, cx, cy)
         self.canvas.coords(self.txt_shadow, cx + 1, cy + 1)
 

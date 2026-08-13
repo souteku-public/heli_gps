@@ -31,9 +31,13 @@ class SuperStyle:
     font_path: Optional[str] = None      # 明示指定(なければ候補から自動)
     font_size: int = 90
     color: tuple[int, int, int] = (255, 255, 255)
-    align_x: str = "center"              # left/center/right
-    align_y: str = "bottom"              # top/center/bottom
-    margin_x: int = 0                    # 基準位置からのオフセット(px)
+    # 水平: 基準点 margin_x に対して文字の left/center/right を合わせる。
+    #   left  … 基準点=文字の左端(右へ伸びる)
+    #   right … 基準点=文字の右端(左へ伸びる)
+    #   center… 基準点=文字の中央
+    align_x: str = "left"
+    align_y: str = "top"                 # top/center/bottom(margin_y基準)
+    margin_x: int = 80                   # 水平の基準位置(px)
     margin_y: int = 60
     # フチ取り(視認性向上。放送テロップの定番)
     stroke_width: int = 4
@@ -126,13 +130,13 @@ class SuperRenderer:
         bbox = draw.textbbox((0, 0), text, font=font, stroke_width=st.stroke_width)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-        # 基準位置(アンカー)を決める
-        if st.align_x == "left":
+        # 水平: 基準点 margin_x に文字の左端/中央/右端を合わせる(アンカー相対)
+        if st.align_x == "right":
+            x = st.margin_x - tw - bbox[0]
+        elif st.align_x == "center":
+            x = st.margin_x - tw // 2 - bbox[0]
+        else:  # left
             x = st.margin_x - bbox[0]
-        elif st.align_x == "right":
-            x = self.width - tw - st.margin_x - bbox[0]
-        else:  # center
-            x = (self.width - tw) // 2 - bbox[0] + st.margin_x
         if st.align_y == "top":
             y = st.margin_y - bbox[1]
         elif st.align_y == "center":
