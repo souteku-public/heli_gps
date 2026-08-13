@@ -161,10 +161,13 @@ class GstSubprocessBridge:
             full = (f"video/x-raw,format=BGRA,width={self.width},height={self.height},"
                     f"framerate={self.framerate},interlace-mode=interleaved")
             video_out += ["capssetter", "join=false", f"caps={full}", "!"]
+        # sync=false を付けると decklink 出力スケジューラが破綻して
+        # "Failed to schedule frame" になる。既定(sync=true)で出力クロックに乗せる。
+        # フレーム供給は sink のクロックが TCP 背圧経由で Python をペーシングする。
         video_out += ["videoconvert", "!",
                       "decklinkvideosink", f"device-number={self.out_device}",
                       f"mode={self.mode}", "video-format=8bit-bgra",
-                      f"keyer-mode={self.keyer}", "sync=false"]
+                      f"keyer-mode={self.keyer}"]
         cmd = [
             self.gst, "-e",
             # 映像入力(音声のために必須)
