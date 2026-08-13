@@ -157,20 +157,18 @@ class GstSubprocessBridge:
             return self._build_cmd_preview()
         return self._build_cmd_output()
 
-    # 入力音声のブランチ(音声取得には映像入力が必須なので decklinkvideosrc も動かす)
-    def _audio_branch(self, video_to="fakesink"):
-        vsrc = ["decklinkvideosrc", f"device-number={self.in_device}",
-                f"connection={self.vconnection}", f"mode={self.vmode}", "!"]
-        vsrc += (["deinterlace", "!"] if (self.preview and self.deinterlace) else [])
-        # プレビューでは映像を compositor へ、本番出力では fakesink へ
-        vsrc += (["videoconvert", "!", "video/x-raw,format=BGRA", "!", "comp.sink_0"]
-                 if self.preview else ["fakesink", "sync=false"])
-        asrc = ["decklinkaudiosrc", f"device-number={self.in_device}",
+    # 音声取得のブランチ(音声には映像入力が必須なので decklinkvideosrc も動かす)
+    def _audio_sink_branch(self):
+        return ["decklinkaudiosrc", f"device-number={self.in_device}",
                 "connection=embedded", f"channels={self.channels}", "do-timestamp=true", "!",
                 "audioconvert", "!",
                 f"audio/x-raw,format=S16LE,channels={self.channels},rate={self.rate}", "!",
                 "tcpclientsink", "host=127.0.0.1", f"port={self.audio_port}"]
-        return vsrc, asrc
+
+    def _video_in(self, sink):
+        # 映像入力。sink に接続文字列(fakesink 等 / comp.sink_0)を渡す
+        return ["decklinkvideosrc", f"device-number={self.in_device}",
+                f"connection={self.vconnection}", f"mode={self.vmode}", "!"] + sink
 
     def _telop_src(self):
         # Pythonから来る BGRA テロップ(TCP) をフレームに切り出す
@@ -179,14 +177,18 @@ class GstSubprocessBridge:
                 f"width={self.width}", f"height={self.height}", f"framerate={self.framerate}", "!"]
 
     def _build_cmd_preview(self):
-        # 入力映像 + テロップ を compositor で合成し、PC窓(autovideosink)へ表示
-        vsrc, asrc = self._audio_branch()
-        telop = self._telop_src() + ["comp.sink_1"]
+        pw, ph = self.preview_width, self.preview_height
+        scale_caps = f"video/x-raw,format=BGRA,width={pw},height={ph}"
+        # 入力映像: deinterlace → 窓サイズにスケール → compositor sink_0
+        vin_tail = ((["deinterlace", "!"] if self.deinterlace else [])
+                    + ["videoconvert", "!", "videoscale", "!", scale_caps, "!", "comp.sink_0"])
+        vin = self._video_in(vin_tail)
+        # テロップ: 窓サイズにスケール → compositor sink_1(アルファ合成で上に乗る)
+        telop = (self._telop_src()
+                 + ["videoscale", "!", "videoconvert", "!", scale_caps, "!", "comp.sink_1"])
         comp = ["compositor", "name=comp", "background=black", "!",
-                "videoconvert", "!", "videoscale", "!",
-                f"video/x-raw,width={self.preview_width},height={self.preview_height}", "!",
-                "autovideosink", "sync=false"]
-        return [self.gst, "-e"] + vsrc + telop + comp + asrc
+                "videoconvert", "!", "autovideosink", "sync=false"]
+        return [self.gst, "-e"] + vin + telop + comp + self._audio_sink_branch()
 
     def _build_cmd_output(self):
         # 映像(Pythonから) → Fill&Key出力 のブランチ
@@ -205,8 +207,8 @@ class GstSubprocessBridge:
                       "decklinkvideosink", f"device-number={self.out_device}",
                       f"mode={self.mode}", "video-format=8bit-bgra",
                       f"keyer-mode={self.keyer}"]
-        vsrc, asrc = self._audio_branch()
-        return [self.gst, "-e"] + vsrc + asrc + video_out
+        vin = self._video_in(["fakesink", "sync=false"])
+        return [self.gst, "-e"] + vin + self._audio_sink_branch() + video_out
 
     def start(self):
         # サーバを先に立ててから gst を起動(接続先が居る状態にする)

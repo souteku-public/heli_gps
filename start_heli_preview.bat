@@ -12,6 +12,7 @@ cd /d "%~dp0"
 rem --- 設定 ----------------------------------------------------
 set "CHANNEL=2"
 set "INDEV=0"
+set "VMODE=1080i5994"   rem 入力フォーマット(auto不可: compositorのため固定)
 set "PW=960"
 set "PH=540"
 set "GST1=C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
@@ -23,7 +24,7 @@ where python >nul 2>&1 || goto :err_py
 
 echo プレビューを起動します(入力映像にテロップを重ねてPC窓に表示)...
 start "HeliGPS Preview" cmd /k python -m gst_heli.preview ^
-    --osc-control --channel %CHANNEL% --in-device %INDEV% ^
+    --osc-control --channel %CHANNEL% --in-device %INDEV% --vmode %VMODE% ^
     --preview-width %PW% --preview-height %PH%
 
 echo 制御UIを起動します...
