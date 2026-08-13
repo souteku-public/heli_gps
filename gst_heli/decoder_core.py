@@ -26,7 +26,10 @@ class HeliConfig:
     addr_level: str = "muni"    # pref/muni/city/town
     text_format: str = "{address}上空"
     stale_text: str = ""        # 受信途絶時の表示(空=消す)
-    stale_timeout: float = 5.0
+    stale_timeout: float = 5.0  # これを超えたら「受信中」ではないと判定
+    # 受信が途切れても直近スーパーを保持する秒数(音声の瞬断でテロップが
+    # 消えないようにする)。この時間を過ぎたら stale_text に切り替える。
+    hold_timeout: float = 15.0
 
 
 class HeliDecoder:
@@ -40,6 +43,9 @@ class HeliDecoder:
         self._last_pkt = None
         self._last_time = 0.0
         self.packets_ok = 0
+        # 直近に表示した非空スーパー(瞬断時の保持用)
+        self._held_text = ""
+        self._held_time = 0.0
 
     def feed(self, mono: np.ndarray) -> None:
         """1チャンネルぶんの音声サンプル(float)を投入."""
@@ -63,13 +69,7 @@ class HeliDecoder:
             return True
         return (time.monotonic() - self._last_time) > self.cfg.stale_timeout
 
-    def current_text(self) -> str:
-        """今表示すべきスーパー文字列."""
-        with self._lock:
-            pkt = self._last_pkt
-            stale = self._is_stale()
-        if pkt is None or stale:
-            return self.cfg.stale_text
+    def _format(self, pkt) -> str:
         addr = self._geo.current
         addr_s = addr.text(self.cfg.addr_level) if addr else ""
         try:
@@ -82,6 +82,27 @@ class HeliDecoder:
             )
         except Exception:
             return addr_s
+
+    def current_text(self) -> str:
+        """今表示すべきスーパー文字列.
+
+        受信中は最新の住所を表示。受信が途切れても hold_timeout 以内なら
+        直近スーパーを保持し、音声の瞬断でテロップが消えないようにする。
+        """
+        now = time.monotonic()
+        with self._lock:
+            pkt = self._last_pkt
+            stale = self._is_stale()
+        if pkt is not None and not stale:
+            text = self._format(pkt)
+            if text:
+                self._held_text = text
+                self._held_time = now
+            return text
+        # 受信途絶: 直近スーパーを一定時間だけ保持(瞬断対策)
+        if self._held_text and (now - self._held_time) <= self.cfg.hold_timeout:
+            return self._held_text
+        return self.cfg.stale_text
 
     def status(self) -> dict:
         with self._lock:

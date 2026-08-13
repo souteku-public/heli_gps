@@ -18,14 +18,27 @@ TouchDesigner版・GStreamer版どちらも、同じOSCプロトコルで操作�
 from __future__ import annotations
 
 import argparse
+import json
 import queue
 import socket
 import threading
 import time
 import tkinter as tk
+from pathlib import Path
 from tkinter import colorchooser, ttk
 
 from nnn_decoder.osc import osc_message, osc_parse
+
+# 見た目・位置の既定を保存するファイル(control_ui.py と同じ場所)
+CONFIG_PATH = Path(__file__).with_name("ui_settings.json")
+
+
+def _load_settings() -> dict:
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 try:
     from gst_heli.fonts import list_system_fonts
@@ -90,11 +103,15 @@ class ControlUI:
         self.root = root
         self.osc = osc
         self._last_status = 0.0
-        self.fill = (1.0, 1.0, 1.0)
-        self.stroke = (0.0, 0.0, 0.0)
-        self.font_size = 90
+        # 保存済みの既定(見た目・位置)を読み込む
+        saved = _load_settings()
+        self.fill = tuple(saved.get("fill", (1.0, 1.0, 1.0)))
+        self.stroke = tuple(saved.get("stroke", (0.0, 0.0, 0.0)))
+        self.font_size = int(saved.get("font_size", 90))
+        self._init_stroke_width = int(saved.get("stroke_width", 5))
+        self._init_font_name = saved.get("font_name", "")
         self.super_text = "(プレビュー)"
-        self.pos = [480, 900]        # フレーム座標(左上, px)
+        self.pos = list(saved.get("pos", [480, 900]))   # フレーム座標(左上, px)
         # 見た目・配置の変更は「決定」ボタンを押すまで送らずに溜めておく。
         # (address:args の辞書。同じ宛先は最新値で上書き)
         self._pending: dict = {}
@@ -102,11 +119,14 @@ class ControlUI:
         root.geometry("600x900")
         root.minsize(560, 520)
         self._build()
-        # 初期値を送信(align=左上・絶対座標方式に固定)。基準値なので即送信。
+        # 保存済みフォントを選択に反映
+        if self._init_font_name and self._init_font_name in self._font_lut:
+            self.font_var.set(self._init_font_name)
+        # 起動時に現在のUI状態(保存値があればそれ)を送出側へ流し込む。
+        # align は左上・絶対座標に固定。見た目/位置は基準値なので即送信。
         self.osc.send("/heli/ctrl/Alignx", "left")
         self.osc.send("/heli/ctrl/Aligny", "top")
-        self.osc.send("/heli/ctrl/Posx", float(self.pos[0]))
-        self.osc.send("/heli/ctrl/Posy", float(self.pos[1]))
+        self._broadcast_look()
         self._poll()
 
     # ---------- ウィジェット生成補助 ----------
@@ -124,17 +144,32 @@ class ControlUI:
         return var
 
     def _slider(self, parent, label, ctrl_name, lo, hi, default, on_extra=None):
+        """スライダー + 数値直接入力(スピンボックス)。両者は連動。"""
         fr = ttk.Frame(parent); fr.pack(fill="x", pady=3)
         ttk.Label(fr, text=label, width=16).pack(side="left")
-        val = tk.DoubleVar(value=default)
-        vlab = ttk.Label(fr, text=f"{default:g}", width=5); vlab.pack(side="right")
+        val = tk.IntVar(value=int(default))
 
-        def on_move(_v):
-            v = val.get(); vlab.config(text=f"{v:.0f}")
+        def emit():
+            try:
+                v = int(float(val.get()))
+            except Exception:
+                return
+            v = max(int(lo), min(int(hi), v))
+            if v != val.get():
+                val.set(v)
             self._stage(f"/heli/ctrl/{ctrl_name}", int(v))
             if on_extra:
                 on_extra(v)
-        ttk.Scale(fr, from_=lo, to=hi, variable=val, command=on_move).pack(
+
+        # 数値入力(スピンボックス)。Enter/フォーカスアウト/上下ボタンで確定。
+        sb = ttk.Spinbox(fr, from_=lo, to=hi, textvariable=val, width=5,
+                         command=emit)
+        sb.pack(side="right")
+        sb.bind("<Return>", lambda _e: emit())
+        sb.bind("<FocusOut>", lambda _e: emit())
+        # スライダー。ドラッグで数値も追従、離した値を送る。
+        ttk.Scale(fr, from_=lo, to=hi, variable=val,
+                  command=lambda _v: emit()).pack(
             side="left", fill="x", expand=True, padx=4)
         return val
 
@@ -202,7 +237,8 @@ class ControlUI:
         self.size_var = self._slider(s, "文字サイズ", "Fontsize", 20, 250, self.font_size,
                                      on_extra=self._on_size)
         self._build_colors(s)
-        self.stroke_var = self._slider(s, "フチの太さ", "Strokewidth", 0, 20, 5)
+        self.stroke_var = self._slider(s, "フチの太さ", "Strokewidth", 0, 20,
+                                       self._init_stroke_width)
 
     def _build_place(self, parent):
         s = self._section(parent, "配置")
@@ -233,8 +269,10 @@ class ControlUI:
         self.apply_btn = ttk.Button(ap, text="決定（反映）", state="disabled",
                                     command=self._apply_pending)
         self.apply_btn.pack(side="left", fill="x", expand=True)
-        ttk.Label(ap, text="見た目・配置は決定で反映",
-                  foreground="#666").pack(side="left", padx=6)
+        # 現在の見た目・位置を次回起動時の既定として保存
+        self.save_btn = ttk.Button(ap, text="既定として保存", width=14,
+                                   command=self._save_settings)
+        self.save_btn.pack(side="right")
 
     def _build_status(self):
         st = ttk.LabelFrame(self.root, text="受信状態")
@@ -262,12 +300,12 @@ class ControlUI:
     def _build_colors(self, parent):
         fr = ttk.Frame(parent); fr.pack(fill="x", pady=6)
         ttk.Label(fr, text="文字色(中)", width=16).pack(side="left")
-        self.fill_sw = tk.Label(fr, text="   ", bg="#ffffff", relief="solid", width=4)
+        self.fill_sw = tk.Label(fr, text="   ", bg=_hex(self.fill), relief="solid", width=4)
         self.fill_sw.pack(side="left", padx=4)
         ttk.Button(fr, text="選ぶ", width=5, command=self._pick_fill).pack(side="left")
         fr2 = ttk.Frame(parent); fr2.pack(fill="x", pady=6)
         ttk.Label(fr2, text="フチ色", width=16).pack(side="left")
-        self.stroke_sw = tk.Label(fr2, text="   ", bg="#000000", relief="solid", width=4)
+        self.stroke_sw = tk.Label(fr2, text="   ", bg=_hex(self.stroke), relief="solid", width=4)
         self.stroke_sw.pack(side="left", padx=4)
         ttk.Button(fr2, text="選ぶ", width=5, command=self._pick_stroke).pack(side="left")
 
@@ -291,6 +329,42 @@ class ControlUI:
             self.osc.send(address, *args)
         self._pending.clear()
         self._mark_dirty()
+
+    def _broadcast_look(self):
+        """現在の見た目・位置を送出側へ即時送信(起動時の同期用)."""
+        name = self.font_var.get()
+        path = self._font_lut.get(name, "")
+        if path:
+            self.osc.send("/heli/ctrl/Fontpath", path)
+        if name:
+            self.osc.send("/heli/ctrl/Font", name)
+        self.osc.send("/heli/ctrl/Fontsize", int(self.size_var.get()))
+        self.osc.send("/heli/ctrl/Strokewidth", int(self.stroke_var.get()))
+        for comp, ch in (("r", 0), ("g", 1), ("b", 2)):
+            self.osc.send(f"/heli/ctrl/Fontcolor{comp}", float(self.fill[ch]))
+            self.osc.send(f"/heli/ctrl/Strokecolor{comp}", float(self.stroke[ch]))
+        self.osc.send("/heli/ctrl/Posx", float(self.pos[0]))
+        self.osc.send("/heli/ctrl/Posy", float(self.pos[1]))
+
+    def _collect_settings(self) -> dict:
+        return {
+            "font_name": self.font_var.get(),
+            "font_size": int(self.size_var.get()),
+            "fill": list(self.fill),
+            "stroke": list(self.stroke),
+            "stroke_width": int(self.stroke_var.get()),
+            "pos": list(self.pos),
+        }
+
+    def _save_settings(self):
+        """現在の見た目・位置を次回起動時の既定として保存."""
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self._collect_settings(), f, ensure_ascii=False, indent=2)
+            self.save_btn.config(text="保存しました")
+        except Exception:
+            self.save_btn.config(text="保存失敗")
+        self.root.after(1500, lambda: self.save_btn.config(text="既定として保存"))
 
     # ---------- コールバック ----------
     def _on_font(self, _e=None):
@@ -363,13 +437,13 @@ class ControlUI:
                 self._on_status(a, args)
         except queue.Empty:
             pass
+        # メッセージが途切れた=送出アプリが停止/未接続(GPS途絶とは区別)
         if time.monotonic() - self._last_status > STALE_SEC:
-            self.recv_lbl.config(text="● GPS途絶/未受信", bg="#c33")
+            self.recv_lbl.config(text="● アプリ未接続/停止", bg="gray")
         self.root.after(200, self._poll)
 
     def _on_status(self, a, args):
-        self._last_status = time.monotonic()
-        self.recv_lbl.config(text="● 受信中", bg="#2a2")
+        self._last_status = time.monotonic()   # アプリからの通信あり
         if a == "/heli/super" and args:
             self.super_text = args[0]
             self.super_lbl.config(text=args[0] or "(表示なし)")
@@ -377,8 +451,14 @@ class ControlUI:
         elif a == "/heli/position" and len(args) >= 3:
             self.info_lbl.config(text=f"緯度 {args[0]:.5f}  経度 {args[1]:.5f}  高度 {args[2]:.0f}m")
         elif a == "/heli/status" and len(args) >= 3:
-            fix = {0: "正常", 1: "バックアップ", 2: "使用不能"}.get(args[0], "?")
-            sats = "--" if args[1] < 0 else args[1]
+            # 新形式: (受信中1/0, 測位, 衛星)。受信可否で色分け。
+            receiving = bool(args[0])
+            if receiving:
+                self.recv_lbl.config(text="● 受信中", bg="#2a2")
+            else:
+                self.recv_lbl.config(text="● GPS途絶(直近を保持)", bg="#c33")
+            fix = {0: "正常", 1: "バックアップ", 2: "使用不能"}.get(args[1], "?")
+            sats = "--" if args[2] < 0 else args[2]
             self.fix_lbl.config(text=f"測位 {fix}  衛星 {sats}")
 
 

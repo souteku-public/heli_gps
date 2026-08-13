@@ -161,9 +161,11 @@ class StatusSender:
             if st["lat"] is not None:
                 self._osc.send_raw("/heli/position", float(st["lat"]),
                                    float(st["lon"]), float(st["alt"]))
-                self._osc.send_raw("/heli/status", int(st["fix"] or 0),
-                                   int(st["sats"] if st["sats"] is not None else -1),
-                                   "01")
+                # 受信状態(1=受信中/0=途絶)を先頭に付けて送る。
+                # 定期送信で接続は保ちつつ、UIは実際の受信可否を表示できる。
+                self._osc.send_raw("/heli/status", int(bool(st["receiving"])),
+                                   int(st["fix"] or 0),
+                                   int(st["sats"] if st["sats"] is not None else -1))
             if text_changed:
                 self._last_text = text
                 self._osc.send_raw("/heli/super", text)
@@ -177,7 +179,9 @@ def make_engine(args):
     本番送出(app)とプレビュー(preview)で共有する。
     """
     cfg = HeliConfig(fs=args.rate, baud=args.baud, channel=args.channel,
-                     geo_mode=args.geo_mode, addr_level=args.addr_level)
+                     geo_mode=args.geo_mode, addr_level=args.addr_level,
+                     stale_timeout=getattr(args, "stale_timeout", 5.0),
+                     hold_timeout=getattr(args, "hold_timeout", 15.0))
     style = SuperStyle(font_size=args.font_size)
     decoder = HeliDecoder(cfg)
     renderer = SuperRenderer(args.width, args.height, style)
@@ -322,6 +326,10 @@ def build_parser():
     ap.add_argument("--geo-mode", default="offline", choices=["offline", "auto", "online"])
     ap.add_argument("--addr-level", default="muni", choices=["pref", "muni", "city", "town"])
     ap.add_argument("--font-size", type=int, default=90)
+    ap.add_argument("--stale-timeout", type=float, default=5.0,
+                    help="この秒数を超えたら『受信中』でないと判定")
+    ap.add_argument("--hold-timeout", type=float, default=15.0,
+                    help="受信途絶後も直近スーパーを保持する秒数(音声瞬断対策)")
 
     ap.add_argument("--width", type=int, default=1920)
     ap.add_argument("--height", type=int, default=1080)

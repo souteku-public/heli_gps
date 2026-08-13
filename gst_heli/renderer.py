@@ -54,17 +54,42 @@ class SuperRenderer:
         self.style = style or SuperStyle()
         self._font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
-    def _resolve_font_path(self) -> Optional[str]:
+    @staticmethod
+    def _needs_cjk(text: str) -> bool:
+        # ラテン/数字/記号(<0x2E7F)以外(かな・漢字など)を含むか
+        return any(ord(c) > 0x2E7F for c in text)
+
+    def _resolve_font_path(self, text: str = "") -> Optional[str]:
+        """描画するtextに応じて実際に使うフォントパスを決める.
+
+        ユーザ指定フォントに日本語字形が無く、textが日本語を含む場合は、
+        テロップが消えないよう日本語対応の候補フォントへ自動フォールバックする。
+        """
         import os
-        if self.style.font_path and os.path.exists(self.style.font_path):
-            return self.style.font_path
+        from .fonts import font_has_japanese
+
+        user = (self.style.font_path
+                if self.style.font_path and os.path.exists(self.style.font_path)
+                else None)
+        need_jp = self._needs_cjk(text)
+        # ユーザ指定でOK(日本語不要 or 日本語字形あり)ならそれを使う
+        if user and (not need_jp or font_has_japanese(user)):
+            return user
+        # 日本語が要るのに指定フォントが非対応 → 日本語対応の候補を探す
+        if need_jp:
+            for p in _FONT_CANDIDATES:
+                if os.path.exists(p) and font_has_japanese(p):
+                    return p
+        # それでも無ければ: ユーザ指定 → 存在する最初の候補
+        if user:
+            return user
         for p in _FONT_CANDIDATES:
             if os.path.exists(p):
                 return p
         return None
 
-    def _font(self) -> ImageFont.FreeTypeFont:
-        path = self._resolve_font_path()
+    def _font(self, text: str = "") -> ImageFont.FreeTypeFont:
+        path = self._resolve_font_path(text)
         key = (path or "<default>", self.style.font_size)
         if key in self._font_cache:
             return self._font_cache[key]
@@ -95,7 +120,7 @@ class SuperRenderer:
     def _draw_text(self, img: Image.Image, text: str) -> None:
         st = self.style
         draw = ImageDraw.Draw(img)
-        font = self._font()
+        font = self._font(text)
 
         # テキスト範囲を測る
         bbox = draw.textbbox((0, 0), text, font=font, stroke_width=st.stroke_width)

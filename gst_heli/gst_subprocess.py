@@ -171,13 +171,20 @@ class GstSubprocessBridge:
     # 音声取得のブランチ(音声には映像入力が必須なので decklinkvideosrc も動かす)
     def _audio_sink_branch(self):
         dts = "true" if self.audio_timestamp else "false"
+        # 復調にはサンプルの連続性が命(欠けると MSK が壊れる)。
+        #  - queue はサイズ無制限(実質ドロップ無し)で瞬間的な詰まりを吸収。
+        #  - tcpclientsink sync=false: パイプラインのクロックに同期させず、
+        #    届いた音声をそのまま即転送する。ペースは TCP の背圧で Python 側が
+        #    決める。sync=true(既定)だとクロック競合時に音声が間引かれ、
+        #    復調が断続的になる原因になる。
         return ["decklinkaudiosrc", f"device-number={self.in_device}",
                 "connection=embedded", f"channels={self.channels}", f"do-timestamp={dts}", "!",
                 "audioconvert", "!",
                 f"audio/x-raw,format=S16LE,channels={self.channels},rate={self.rate}", "!",
-                "queue", "leaky=downstream", "max-size-buffers=0", "max-size-bytes=0",
+                "queue", "leaky=no", "max-size-buffers=0", "max-size-bytes=0",
                 "max-size-time=0", "!",
-                "tcpclientsink", "host=127.0.0.1", f"port={self.audio_port}"]
+                "tcpclientsink", "host=127.0.0.1", f"port={self.audio_port}",
+                "sync=false"]
 
     def _video_in(self, sink):
         # 映像入力。sink に接続文字列(fakesink 等 / comp.sink_0)を渡す
