@@ -99,7 +99,8 @@ class ControlUI:
         # (address:args の辞書。同じ宛先は最新値で上書き)
         self._pending: dict = {}
         root.title("ヘリGPS スーパー制御")
-        root.geometry("560x880")
+        root.geometry("600x900")
+        root.minsize(560, 520)
         self._build()
         # 初期値を送信(align=左上・絶対座標方式に固定)。基準値なので即送信。
         self.osc.send("/heli/ctrl/Alignx", "left")
@@ -139,14 +140,46 @@ class ControlUI:
 
     # ---------- 画面構築 ----------
     def _build(self):
-        nb = ttk.Notebook(self.root); nb.pack(fill="both", expand=True, padx=6, pady=6)
+        # タブは廃止し、住所・見た目・配置を1画面に縦並び。
+        # 下部の「決定」「受信状態」は常時見えるよう固定、それ以外はスクロール可。
+        self._build_status()        # 最下部(固定)
+        self._build_apply_bar()     # その上(固定)
+        body = self._scrollable_body()
+        self._build_addr(body)
+        self._build_look(body)
+        self._build_place(body)
+        self._redraw_canvas()
 
-        # === 住所 ===
-        t1 = ttk.Frame(nb); nb.add(t1, text="住所")
-        self._menu(t1, "住所変換モード", GEOMODE, "Geomode", 0)
-        self._menu(t1, "住所の粒度", ADDRLEVEL, "Addrlevel", 1)
-        self._menu(t1, "ビットレート", BAUD, "Baud", 0)
-        fr = ttk.Frame(t1); fr.pack(fill="x", pady=3)
+    def _scrollable_body(self):
+        """縦スクロール可能な内側フレームを返す(小さい画面でも全項目に届く)."""
+        outer = ttk.Frame(self.root)
+        outer.pack(side="top", fill="both", expand=True)
+        sc = tk.Canvas(outer, highlightthickness=0)
+        vsb = ttk.Scrollbar(outer, orient="vertical", command=sc.yview)
+        body = ttk.Frame(sc)
+        body.bind("<Configure>", lambda _e: sc.configure(scrollregion=sc.bbox("all")))
+        win = sc.create_window((0, 0), window=body, anchor="nw")
+        sc.bind("<Configure>", lambda e: sc.itemconfig(win, width=e.width))
+        sc.configure(yscrollcommand=vsb.set)
+        sc.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        # ホイールでスクロール(配置キャンバス上では無効化して誤スクロール防止)
+        def _wheel(e):
+            sc.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        sc.bind_all("<MouseWheel>", _wheel)
+        return body
+
+    def _section(self, parent, title):
+        lf = ttk.LabelFrame(parent, text=title)
+        lf.pack(fill="x", padx=8, pady=(6, 0))
+        return lf
+
+    def _build_addr(self, parent):
+        s = self._section(parent, "住所")
+        self._menu(s, "住所変換モード", GEOMODE, "Geomode", 0)
+        self._menu(s, "住所の粒度", ADDRLEVEL, "Addrlevel", 1)
+        self._menu(s, "ビットレート", BAUD, "Baud", 0)
+        fr = ttk.Frame(s); fr.pack(fill="x", pady=3)
         ttk.Label(fr, text="GPS音声ch(1-8)", width=16).pack(side="left")
         # 表示は1始まり(CH1..CH8)。内部/OSCは0始まりに変換して送る。
         self.audiochan = tk.IntVar(value=3)
@@ -155,7 +188,7 @@ class ControlUI:
                                                   int(self.audiochan.get()) - 1)).pack(side="left")
         for label, ctrl, dflt in (("表示書式", "Textformat", "{address}上空"),
                                   ("受信途絶時の表示", "Staletext", "")):
-            fr = ttk.Frame(t1); fr.pack(fill="x", pady=3)
+            fr = ttk.Frame(s); fr.pack(fill="x", pady=3)
             ttk.Label(fr, text=label, width=16).pack(side="left")
             var = tk.StringVar(value=dflt)
             e = ttk.Entry(fr, textvariable=var); e.pack(side="left", fill="x", expand=True)
@@ -163,18 +196,18 @@ class ControlUI:
             e.bind("<Return>", act)
             ttk.Button(fr, text="適用", width=5, command=act).pack(side="left")
 
-        # === 見た目 ===
-        t2 = ttk.Frame(nb); nb.add(t2, text="見た目")
-        self._build_font(t2)
-        self.size_var = self._slider(t2, "文字サイズ", "Fontsize", 20, 250, self.font_size,
+    def _build_look(self, parent):
+        s = self._section(parent, "見た目")
+        self._build_font(s)
+        self.size_var = self._slider(s, "文字サイズ", "Fontsize", 20, 250, self.font_size,
                                      on_extra=self._on_size)
-        self._build_colors(t2)
-        self.stroke_var = self._slider(t2, "フチの太さ", "Strokewidth", 0, 20, 5)
+        self._build_colors(s)
+        self.stroke_var = self._slider(s, "フチの太さ", "Strokewidth", 0, 20, 5)
 
-        # === 配置(ドラッグ) ===
-        t3 = ttk.Frame(nb); nb.add(t3, text="配置")
-        ttk.Label(t3, text="文字をドラッグして位置を決めてください(矢印キーで微調整)").pack(pady=4)
-        self.canvas = tk.Canvas(t3, width=CANVAS_W, height=CANVAS_H, bg="#334",
+    def _build_place(self, parent):
+        s = self._section(parent, "配置")
+        ttk.Label(s, text="文字をドラッグして位置を決めてください(矢印キーで微調整)").pack(pady=4)
+        self.canvas = tk.Canvas(s, width=CANVAS_W, height=CANVAS_H, bg="#334",
                                 highlightthickness=1, highlightbackground="#888")
         self.canvas.pack(pady=6)
         self.canvas.create_rectangle(2, 2, CANVAS_W - 2, CANVAS_H - 2, outline="#aaa")
@@ -192,20 +225,20 @@ class ControlUI:
             self.root.bind(key, lambda e, dx=dx, dy=dy:
                            self._nudge(dx * (10 if e.state & 1 else 1),
                                        dy * (10 if e.state & 1 else 1)))
-        self._redraw_canvas()
 
-        # === 決定(反映)ボタン ===
+    def _build_apply_bar(self):
         # 見た目・配置(フォント/文字サイズ/色/フチ/位置)の変更は、ここを押す
         # まで送出側に反映しない。誤操作で本番のスーパーが即変わるのを防ぐ。
-        ap = ttk.Frame(self.root); ap.pack(fill="x", padx=6, pady=(0, 2))
+        ap = ttk.Frame(self.root); ap.pack(side="bottom", fill="x", padx=6, pady=(2, 2))
         self.apply_btn = ttk.Button(ap, text="決定（反映）", state="disabled",
                                     command=self._apply_pending)
         self.apply_btn.pack(side="left", fill="x", expand=True)
         ttk.Label(ap, text="見た目・配置は決定で反映",
                   foreground="#666").pack(side="left", padx=6)
 
-        # === 状態表示 ===
-        st = ttk.LabelFrame(self.root, text="受信状態"); st.pack(fill="x", padx=6, pady=6)
+    def _build_status(self):
+        st = ttk.LabelFrame(self.root, text="受信状態")
+        st.pack(side="bottom", fill="x", padx=6, pady=6)
         self.recv_lbl = tk.Label(st, text="● 未受信", fg="white", bg="gray",
                                  font=("", 12, "bold")); self.recv_lbl.pack(fill="x", padx=6, pady=4)
         self.super_lbl = tk.Label(st, text="―", font=("", 18, "bold")); self.super_lbl.pack(pady=2)
