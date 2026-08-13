@@ -156,8 +156,11 @@ class GstSubprocessBridge:
                      *rvp.split(), "!"]
         if self.interlace:
             # rawvideoparse はプログレッシブしか出さないため、1080i の sink 向けに
-            # interlace エレメントで実際にインターレース化(フィールドに織り込む)。
-            video_out += ["interlace", "!"]
+            # capssetter(join=false=完全置換)で interlace-mode を interleaved に
+            # ラベル差し替え。BGRA(アルファ=Key)を保持したまま1080i化できる。
+            full = (f"video/x-raw,format=BGRA,width={self.width},height={self.height},"
+                    f"framerate={self.framerate},interlace-mode=interleaved")
+            video_out += ["capssetter", "join=false", f"caps={full}", "!"]
         video_out += ["videoconvert", "!",
                       "decklinkvideosink", f"device-number={self.out_device}",
                       f"mode={self.mode}", "video-format=8bit-bgra",
