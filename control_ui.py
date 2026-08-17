@@ -40,6 +40,18 @@ def _load_settings() -> dict:
     except Exception:
         return {}
 
+
+def _write_settings(full: dict) -> bool:
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(full, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+N_PRESETS = 3   # 番組プリセットの数
+
 try:
     from gst_heli.fonts import list_system_fonts
 except Exception:
@@ -113,6 +125,12 @@ class ControlUI:
         self.align_x = saved.get("align_x", "left")     # left/center/right
         self.super_text = "(プレビュー)"
         self.pos = list(saved.get("pos", [480, 900]))   # フレーム座標(基準点, px)
+        # 番組プリセット(名前付き)。[{name, settings}, ...]
+        self._presets = list(saved.get("presets", []))
+        # ドラッグ中の状態(ゴースト表示・つかんだ位置のオフセット)
+        self._dragging = False
+        self._drag_off = (0, 0)
+        self._ghost_box = None
         # 見た目・配置の変更は「決定」ボタンを押すまで送らずに溜めておく。
         # (address:args の辞書。同じ宛先は最新値で上書き)
         self._pending: dict = {}
@@ -183,6 +201,7 @@ class ControlUI:
         self._build_addr(body)
         self._build_look(body)
         self._build_place(body)
+        self._build_presets(body)
         self._redraw_canvas()
 
     def _scrollable_body(self):
@@ -261,7 +280,8 @@ class ControlUI:
 
     def _build_place(self, parent):
         s = self._section(parent, "配置")
-        ttk.Label(s, text="文字をドラッグして位置を決めてください(矢印キーで微調整)").pack(pady=4)
+        ttk.Label(s, text="文字をつかんでドラッグ(離すと確定)。空白クリックでそこへ中央移動。"
+                          "矢印キーで微調整").pack(pady=4)
         self.canvas = tk.Canvas(s, width=CANVAS_W, height=CANVAS_H, bg="#334",
                                 highlightthickness=1, highlightbackground="#888")
         self.canvas.pack(pady=6)
@@ -270,16 +290,39 @@ class ControlUI:
         self.canvas.create_rectangle(CANVAS_W * 0.05, CANVAS_H * 0.05,
                                      CANVAS_W * 0.95, CANVAS_H * 0.95,
                                      outline="#556", dash=(3, 3))
+        # ドラッグ中に出す半透明ゴースト枠(最初は隠しておく)
+        self._ghost_box = self.canvas.create_rectangle(0, 0, 0, 0, outline="#0cf",
+                                                        dash=(3, 2), width=2,
+                                                        state="hidden")
         self.txt_shadow = self.canvas.create_text(0, 0, anchor="nw", text="", fill="black")
         self.txt_item = self.canvas.create_text(0, 0, anchor="nw", text="", fill="white")
-        self.canvas.tag_bind(self.txt_item, "<ButtonPress-1>", self._drag_start)
-        self.canvas.tag_bind(self.txt_item, "<B1-Motion>", self._drag_move)
-        self.canvas.bind("<Button-1>", self._canvas_click)  # 空白クリックでそこへ移動
+        for it in (self.txt_item, self.txt_shadow):
+            self.canvas.tag_bind(it, "<ButtonPress-1>", self._drag_start)
+            self.canvas.tag_bind(it, "<B1-Motion>", self._drag_move)
+            self.canvas.tag_bind(it, "<ButtonRelease-1>", self._drag_end)
+        self.canvas.bind("<Button-1>", self._canvas_click)   # 空白クリックで中央移動
+        self.canvas.bind("<ButtonRelease-1>", self._drag_end)
         for key, dx, dy in (("<Up>", 0, -1), ("<Down>", 0, 1),
                             ("<Left>", -1, 0), ("<Right>", 1, 0)):
             self.root.bind(key, lambda e, dx=dx, dy=dy:
                            self._nudge(dx * (10 if e.state & 1 else 1),
                                        dy * (10 if e.state & 1 else 1)))
+
+    def _build_presets(self, parent):
+        s = self._section(parent, "番組プリセット(名前を付けて保存/呼出)")
+        self._preset_name_vars = []
+        for i in range(N_PRESETS):
+            fr = ttk.Frame(s); fr.pack(fill="x", pady=2)
+            saved = self._presets[i] if i < len(self._presets) else {}
+            var = tk.StringVar(value=(saved.get("name") or f"番組{i + 1}"))
+            self._preset_name_vars.append(var)
+            ttk.Entry(fr, textvariable=var, width=18).pack(side="left", padx=(0, 4))
+            ttk.Button(fr, text="呼出", width=6,
+                       command=lambda i=i: self._recall_preset(i)).pack(side="left")
+            ttk.Button(fr, text="保存", width=6,
+                       command=lambda i=i: self._save_preset(i)).pack(side="left", padx=4)
+        self.preset_msg = ttk.Label(s, text="", foreground="#0a0")
+        self.preset_msg.pack(anchor="w", padx=2, pady=(2, 4))
 
     def _build_apply_bar(self):
         # 見た目・配置(フォント/文字サイズ/色/フチ/位置)の変更は、ここを押す
@@ -378,14 +421,60 @@ class ControlUI:
         }
 
     def _save_settings(self):
-        """現在の見た目・位置を次回起動時の既定として保存."""
-        try:
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(self._collect_settings(), f, ensure_ascii=False, indent=2)
-            self.save_btn.config(text="保存しました")
-        except Exception:
-            self.save_btn.config(text="保存失敗")
+        """現在の見た目・位置を次回起動時の既定として保存(プリセットは保持)."""
+        full = _load_settings()
+        full.update(self._collect_settings())     # トップレベル=起動時の既定
+        ok = _write_settings(full)
+        self.save_btn.config(text="保存しました" if ok else "保存失敗")
         self.root.after(1500, lambda: self.save_btn.config(text="既定として保存"))
+
+    def _apply_settings(self, d: dict):
+        """設定dictをUIに反映し、送出側へも即時送信(プリセット呼出用)."""
+        name = d.get("font_name", "")
+        if name and name in self._font_lut:
+            self.font_var.set(name)
+        self.font_size = int(d.get("font_size", self.font_size))
+        self.size_var.set(self.font_size)
+        self.align_x = d.get("align_x", self.align_x)
+        rev = {v: k for k, v in self._align_lut.items()}
+        self.align_var.set(rev.get(self.align_x, "左寄せ"))
+        self.fill = tuple(d.get("fill", self.fill)); self.fill_sw.config(bg=_hex(self.fill))
+        self.stroke = tuple(d.get("stroke", self.stroke))
+        self.stroke_sw.config(bg=_hex(self.stroke))
+        self.stroke_var.set(int(d.get("stroke_width", self.stroke_var.get())))
+        self.pos = list(d.get("pos", self.pos))
+        self._redraw_canvas()
+        self._broadcast_look()              # 呼出は即反映(決定不要)
+        self._pending.clear(); self._mark_dirty()
+
+    def _preset_flash(self, msg: str):
+        if hasattr(self, "preset_msg"):
+            self.preset_msg.config(text=msg)
+            self.root.after(1800, lambda: self.preset_msg.config(text=""))
+
+    def _save_preset(self, i: int):
+        """現在の見た目・位置を i 番目の番組プリセットに保存."""
+        full = _load_settings()
+        presets = list(full.get("presets", []))
+        while len(presets) <= i:
+            presets.append({})
+        name = self._preset_name_vars[i].get().strip() or f"番組{i + 1}"
+        presets[i] = {"name": name, "settings": self._collect_settings()}
+        full["presets"] = presets
+        self._presets = presets
+        ok = _write_settings(full)
+        self._preset_flash(f"「{name}」に保存しました" if ok else "保存失敗")
+
+    def _recall_preset(self, i: int):
+        """i 番目の番組プリセットを呼び出して反映."""
+        full = _load_settings()
+        presets = full.get("presets", [])
+        if i < len(presets) and presets[i].get("settings"):
+            self._apply_settings(presets[i]["settings"])
+            nm = presets[i].get("name") or f"番組{i + 1}"
+            self._preset_flash(f"「{nm}」を呼び出しました")
+        else:
+            self._preset_flash("このプリセットは未保存です")
 
     # ---------- コールバック ----------
     def _on_font(self, _e=None):
@@ -419,17 +508,46 @@ class ControlUI:
         self._redraw_canvas()
 
     # ---------- 配置(ドラッグ) ----------
+    def _anchor_canvas(self):
+        """現在の基準点(pos)のキャンバス座標."""
+        return (self.pos[0] / SCALE, self.pos[1] / SCALE)
+
     def _drag_start(self, e):
-        self._drag_off = (e.x, e.y)
+        # つかんだ点と基準点のズレを記録(文字が角にジャンプしないように)
+        ax, ay = self._anchor_canvas()
+        self._drag_off = (e.x - ax, e.y - ay)
+        self._dragging = True
+        self._redraw_canvas()
+        return "break"          # 空白クリック用ハンドラを抑止
 
     def _drag_move(self, e):
-        cx = max(0, min(CANVAS_W, e.x)); cy = max(0, min(CANVAS_H, e.y))
+        ox, oy = self._drag_off
+        cx = max(0, min(CANVAS_W, e.x - ox))
+        cy = max(0, min(CANVAS_H, e.y - oy))
         self.pos = [int(cx * SCALE), int(cy * SCALE)]
         self._redraw_canvas(); self._send_pos()
+        return "break"
+
+    def _drag_end(self, _e=None):
+        if self._dragging:
+            self._dragging = False
+            self._redraw_canvas()
 
     def _canvas_click(self, e):
-        # テキスト以外をクリックしたらそこを左上に移動
-        self.pos = [int(e.x * SCALE), int(e.y * SCALE)]
+        # 空白クリック: そこを文字の中央にする(角ではなく中央=直感的)
+        self._place_center(e.x, e.y)
+
+    def _place_center(self, cxp, cyp):
+        """キャンバス座標(cxp,cyp)を文字の中央に合わせて基準点を決める."""
+        bb = self.canvas.bbox(self.txt_item)
+        w = (bb[2] - bb[0]) if bb else 0
+        h = (bb[3] - bb[1]) if bb else 0
+        # アンカー(横)から中央へのオフセット: left=+w/2, center=0, right=-w/2
+        dx = {"left": w / 2, "center": 0, "right": -w / 2}.get(self.align_x, w / 2)
+        ax = cxp - dx
+        ay = cyp - h / 2          # 縦は上端基準なので中央は +h/2
+        ax = max(0, min(CANVAS_W, ax)); ay = max(0, min(CANVAS_H, ay))
+        self.pos = [int(ax * SCALE), int(ay * SCALE)]
         self._redraw_canvas(); self._send_pos()
 
     def _nudge(self, dx, dy):
@@ -441,18 +559,33 @@ class ControlUI:
         self._stage("/heli/ctrl/Posy", float(self.pos[1]))
 
     def _redraw_canvas(self):
-        cx, cy = self.pos[0] / SCALE, self.pos[1] / SCALE
+        cx, cy = self._anchor_canvas()
         csize = max(6, int(self.font_size / SCALE))
         font = ("", csize, "bold")
         txt = self.super_text or "(プレビュー)"
         # 横揃えに合わせてアンカーを変える(左寄せ=左端基準/右寄せ=右端基準)
         anchor = {"left": "nw", "center": "n", "right": "ne"}.get(self.align_x, "nw")
-        self.canvas.itemconfig(self.txt_item, text=txt, fill=_hex(self.fill),
-                               font=font, anchor=anchor)
-        self.canvas.itemconfig(self.txt_shadow, text=txt, fill=_hex(self.stroke),
-                               font=font, anchor=anchor)
+        # ドラッグ中は半透明(点描)にして下地(セーフエリア枠)を透かす
+        stip = "gray50" if self._dragging else ""
+        for it, col in ((self.txt_shadow, self.stroke), (self.txt_item, self.fill)):
+            try:
+                self.canvas.itemconfig(it, text=txt, fill=_hex(col), font=font,
+                                       anchor=anchor, stipple=stip)
+            except tk.TclError:            # stipple 非対応の環境
+                self.canvas.itemconfig(it, text=txt, fill=_hex(col), font=font,
+                                       anchor=anchor)
         self.canvas.coords(self.txt_item, cx, cy)
         self.canvas.coords(self.txt_shadow, cx + 1, cy + 1)
+        # ドラッグ中は文字の外接枠を表示(位置合わせの目安)
+        if self._ghost_box is not None:
+            if self._dragging:
+                bb = self.canvas.bbox(self.txt_item)
+                if bb:
+                    self.canvas.coords(self._ghost_box, bb[0] - 2, bb[1] - 2,
+                                       bb[2] + 2, bb[3] + 2)
+                    self.canvas.itemconfig(self._ghost_box, state="normal")
+            else:
+                self.canvas.itemconfig(self._ghost_box, state="hidden")
 
     # ---------- 状態受信 ----------
     def _poll(self):
