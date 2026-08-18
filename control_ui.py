@@ -283,8 +283,11 @@ class ControlUI:
         ttk.Label(s, text="文字をつかんでドラッグ(離すと確定)。空白クリックでそこへ中央移動。"
                           "矢印キーで微調整").pack(pady=4)
         self.canvas = tk.Canvas(s, width=CANVAS_W, height=CANVAS_H, bg="#334",
-                                highlightthickness=1, highlightbackground="#888")
+                                highlightthickness=1, highlightbackground="#888",
+                                takefocus=1)
         self.canvas.pack(pady=6)
+        self.pos_lbl = ttk.Label(s, text="")
+        self.pos_lbl.pack(anchor="w", padx=2)
         self.canvas.create_rectangle(2, 2, CANVAS_W - 2, CANVAS_H - 2, outline="#aaa")
         # セーフエリア目安
         self.canvas.create_rectangle(CANVAS_W * 0.05, CANVAS_H * 0.05,
@@ -302,11 +305,20 @@ class ControlUI:
             self.canvas.tag_bind(it, "<ButtonRelease-1>", self._drag_end)
         self.canvas.bind("<Button-1>", self._canvas_click)   # 空白クリックで中央移動
         self.canvas.bind("<ButtonRelease-1>", self._drag_end)
+        # 矢印キーで1px(Shiftで10px)微調整。テキスト入力中は邪魔しない。
         for key, dx, dy in (("<Up>", 0, -1), ("<Down>", 0, 1),
                             ("<Left>", -1, 0), ("<Right>", 1, 0)):
-            self.root.bind(key, lambda e, dx=dx, dy=dy:
-                           self._nudge(dx * (10 if e.state & 1 else 1),
-                                       dy * (10 if e.state & 1 else 1)))
+            self.root.bind(key, lambda e, dx=dx, dy=dy: self._on_arrow(e, dx, dy))
+
+    def _on_arrow(self, e, dx, dy):
+        # Entry/Spinbox/Combobox にフォーカスがあるときは、その操作を優先
+        w = self.root.focus_get()
+        cls = w.winfo_class() if w is not None else ""
+        if cls in ("TEntry", "Entry", "TSpinbox", "Spinbox", "TCombobox"):
+            return
+        step = 10 if (e.state & 0x1) else 1        # Shiftで10px
+        self._nudge(dx * step, dy * step)
+        return "break"
 
     def _build_presets(self, parent):
         s = self._section(parent, "番組プリセット(名前を付けて保存/呼出)")
@@ -514,6 +526,7 @@ class ControlUI:
 
     def _drag_start(self, e):
         # つかんだ点と基準点のズレを記録(文字が角にジャンプしないように)
+        self.canvas.focus_set()          # 以後の矢印キーは位置調整へ
         ax, ay = self._anchor_canvas()
         self._drag_off = (e.x - ax, e.y - ay)
         self._dragging = True
@@ -535,6 +548,7 @@ class ControlUI:
 
     def _canvas_click(self, e):
         # 空白クリック: そこを文字の中央にする(角ではなく中央=直感的)
+        self.canvas.focus_set()          # 以後の矢印キーは位置調整へ
         self._place_center(e.x, e.y)
 
     def _place_center(self, cxp, cyp):
@@ -565,18 +579,14 @@ class ControlUI:
         txt = self.super_text or "(プレビュー)"
         # 横揃えに合わせてアンカーを変える(左寄せ=左端基準/右寄せ=右端基準)
         anchor = {"left": "nw", "center": "n", "right": "ne"}.get(self.align_x, "nw")
-        # ドラッグ中は半透明(点描)にして下地(セーフエリア枠)を透かす
-        stip = "gray50" if self._dragging else ""
-        for it, col in ((self.txt_shadow, self.stroke), (self.txt_item, self.fill)):
-            try:
-                self.canvas.itemconfig(it, text=txt, fill=_hex(col), font=font,
-                                       anchor=anchor, stipple=stip)
-            except tk.TclError:            # stipple 非対応の環境
-                self.canvas.itemconfig(it, text=txt, fill=_hex(col), font=font,
-                                       anchor=anchor)
+        # 文字は常に単色で描く(点描=stippleは移動時に残像が出るため使わない)
+        self.canvas.itemconfig(self.txt_shadow, text=txt, fill=_hex(self.stroke),
+                               font=font, anchor=anchor)
+        self.canvas.itemconfig(self.txt_item, text=txt, fill=_hex(self.fill),
+                               font=font, anchor=anchor)
         self.canvas.coords(self.txt_item, cx, cy)
         self.canvas.coords(self.txt_shadow, cx + 1, cy + 1)
-        # ドラッグ中は文字の外接枠を表示(位置合わせの目安)
+        # ドラッグ中は文字の外接枠を表示(位置合わせの目安)。枠のみで残像は出ない。
         if self._ghost_box is not None:
             if self._dragging:
                 bb = self.canvas.bbox(self.txt_item)
@@ -586,6 +596,10 @@ class ControlUI:
                     self.canvas.itemconfig(self._ghost_box, state="normal")
             else:
                 self.canvas.itemconfig(self._ghost_box, state="hidden")
+        # 位置の数値表示(矢印キー微調整のフィードバック)
+        if hasattr(self, "pos_lbl"):
+            self.pos_lbl.config(text=f"位置  X: {self.pos[0]}  Y: {self.pos[1]}  px "
+                                     f"(枠内クリックで選択→矢印キーで1px調整 / Shiftで10px)")
 
     # ---------- 状態受信 ----------
     def _poll(self):
