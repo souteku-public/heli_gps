@@ -113,6 +113,9 @@ class HeliDecoder:
             "receiving": pkt is not None and age < self.cfg.stale_timeout,
             "lat": pkt.lat_wgs84 if pkt else None,
             "lon": pkt.lon_wgs84 if pkt else None,
+            # 生の東京測地系(NNNのDDMMSSそのまま)。他システムとの照合用。
+            "lat_tokyo": pkt.lat_tokyo if pkt else None,
+            "lon_tokyo": pkt.lon_tokyo if pkt else None,
             "alt": pkt.alt_m if pkt else None,
             "fix": pkt.fix_status if pkt else None,
             "sats": pkt.satellites if pkt else None,
