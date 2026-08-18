@@ -22,6 +22,7 @@ class HeliConfig:
     fs: float = 48000.0
     baud: int = 1200
     channel: int = 2            # EMB音声のGPSチャンネル(0始まり)
+    datum: str = "wgs84"        # 生座標の測地系(wgs84=変換なし / tokyo=変換)
     geo_mode: str = "offline"   # offline/auto/online
     addr_level: str = "muni"    # pref/muni/city/town
     text_format: str = "{address}上空"
@@ -37,7 +38,7 @@ class HeliDecoder:
 
     def __init__(self, cfg: HeliConfig):
         self.cfg = cfg
-        self._pipe = DecoderPipeline(cfg.fs, baud=cfg.baud)
+        self._pipe = DecoderPipeline(cfg.fs, baud=cfg.baud, datum=cfg.datum)
         self._geo = AsyncReverseGeocoder(mode=cfg.geo_mode)
         self._lock = threading.Lock()
         self._last_pkt = None

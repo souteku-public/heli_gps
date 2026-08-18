@@ -12,10 +12,11 @@ from .uart import UartDecoder
 class DecoderPipeline:
     """MSK復調 → UART → NNNパース をまとめたストリーミングデコーダ."""
 
-    def __init__(self, fs: float, baud: int = 1200, invert: bool = False):
+    def __init__(self, fs: float, baud: int = 1200, invert: bool = False,
+                 datum: str = "wgs84"):
         self.demod = MSKDemodulator(fs, baud=baud, invert=invert)
         self.uart = UartDecoder()
-        self.parser = NNNPacketParser()
+        self.parser = NNNPacketParser(datum=datum)
 
     def process(self, samples: np.ndarray) -> list[NNNPacket]:
         bits = self.demod.process(samples)

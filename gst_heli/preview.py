@@ -100,10 +100,10 @@ def main():
             print(f"[status] 受信={st['receiving']} packets={st['packets_ok']} "
                   f"住所={st['address']}", flush=True)
             if st["lat"] is not None:
-                # 他システムとの照合用に、生の東京測地系DDMMSSとWGS84を併記
+                # 他システムとの照合用に、出力座標(WGS84)を10進とDMSで併記
                 print(f"[coord] WGS84 {st['lat']:.6f},{st['lon']:.6f}"
                       f" ({deg_to_dms_str(st['lat'])},{deg_to_dms_str(st['lon'])})"
-                      f" / 東京測地 {deg_to_dms_str(st['lat_tokyo'])},"
+                      f"  生値 {deg_to_dms_str(st['lat_tokyo'])},"
                       f"{deg_to_dms_str(st['lon_tokyo'])}", flush=True)
     threading.Thread(target=status_loop, daemon=True).start()
 

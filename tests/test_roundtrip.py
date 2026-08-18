@@ -34,12 +34,28 @@ def test_clean_roundtrip(fs, baud):
     assert p.fix_status == 0
     assert p.pdop == 2
     assert p.satellites == 8
-    # 東京測地系の生値: 35°40'27" / 139°45'10"
+    # 生値(復号したDDMMSS): 35°40'27" / 139°45'10"
     assert abs(p.lat_tokyo - (35 + 40 / 60 + 27 / 3600)) < 1e-9
     assert abs(p.lon_tokyo - (139 + 45 / 60 + 10 / 3600)) < 1e-9
     assert p.alt_m == 500
     assert p.in_range
-    # WGS84変換後は北東へ約11-12秒ずれる(東京付近)
+    # 既定(datum=wgs84)は変換しない: 生値=WGS84
+    assert p.lat_wgs84 == p.lat_tokyo
+    assert p.lon_wgs84 == p.lon_tokyo
+
+
+def test_tokyo_datum_conversion():
+    """datum='tokyo' 指定時のみ東京測地系→WGS84変換が働くこと."""
+    fs = 48000
+    audio = encode_position_to_audio(
+        fs, lat_dms="354027", lon_dms="1394510", alt_m=500)
+    pipe = DecoderPipeline(fs, datum="tokyo")
+    pkts = []
+    for i in range(0, len(audio), 4096):
+        pkts.extend(pipe.process(audio[i : i + 4096]))
+    assert len(pkts) == 1
+    p = pkts[0]
+    # 東京測地系→WGS84で北東へ約11-12秒ずれる(東京付近)
     assert 0.002 < (p.lat_wgs84 - p.lat_tokyo) < 0.004
     assert -0.004 < (p.lon_wgs84 - p.lon_tokyo) < -0.002
 

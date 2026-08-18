@@ -130,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--audio-stream", type=int, default=0,
                     help="映像ファイル内の音声トラック番号 (既定 0)")
     ap.add_argument("--invert", action="store_true", help="マーク/スペース反転")
+    ap.add_argument("--datum", default="wgs84", choices=["wgs84", "tokyo"],
+                    help="NNN座標の測地系。wgs84=変換なし(既定) / tokyo=WGS84へ変換")
     ap.add_argument("--csv", help="復調結果をCSVに保存")
     ap.add_argument("--address", action="store_true",
                     help="住所(市区町村)も表示 (同梱データでオフライン判定)")
@@ -157,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if tmp:
             os.unlink(tmp)
-    pipe = DecoderPipeline(fs, baud=args.baud, invert=args.invert)
+    pipe = DecoderPipeline(fs, baud=args.baud, invert=args.invert, datum=args.datum)
     geo = None
     if args.address or args.address_online:
         from .geocode import ReverseGeocoder

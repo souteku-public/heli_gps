@@ -16,7 +16,8 @@ DATA部(20byte, すべてASCII):
     経度: 10進7桁 DDDMMSS (1354027 → 東経135度40分27秒)
     高度: 10進3桁 ×10m (012 → 120m)
 
-測地系は東京測地系。有効範囲: 北緯20〜50度, 東経120〜150度, 高度0〜4000m。
+座標の測地系は機器/設定によりWGS84(既定)または東京測地系。
+有効範囲: 北緯20〜50度, 東経120〜150度, 高度0〜4000m。
 """
 
 from __future__ import annotations
@@ -47,16 +48,22 @@ class NNNPacket:
     fix_status: int            # 0/1/2
     pdop: Optional[int]        # 1〜15, 不明はNone
     satellites: Optional[int]  # 0〜9, 不明はNone
-    lat_tokyo: float           # 東京測地系 緯度[度]
-    lon_tokyo: float           # 東京測地系 経度[度]
+    lat_tokyo: float           # 復号した生の緯度[度](NNNのDDMMSS)
+    lon_tokyo: float           # 復号した生の経度[度](NNNのDDMMSS)
     alt_m: float               # 高度[m]
+    # 生値の測地系。"wgs84"(既定)=そのままWGS84として扱う(変換なし)。
+    # "tokyo"=東京測地系とみなしWGS84へ変換する。
+    datum: str = "wgs84"
     lat_wgs84: float = field(init=False)
     lon_wgs84: float = field(init=False)
     raw: bytes = b""
     in_range: bool = True      # 仕様の有効範囲内か
 
     def __post_init__(self):
-        self.lat_wgs84, self.lon_wgs84 = tokyo_to_wgs84(self.lat_tokyo, self.lon_tokyo)
+        if self.datum == "tokyo":
+            self.lat_wgs84, self.lon_wgs84 = tokyo_to_wgs84(self.lat_tokyo, self.lon_tokyo)
+        else:                    # 生値がすでにWGS84 → 変換しない
+            self.lat_wgs84, self.lon_wgs84 = self.lat_tokyo, self.lon_tokyo
 
     @property
     def fix_status_text(self) -> str:
@@ -74,7 +81,8 @@ class ParseError(Exception):
     pass
 
 
-def _parse_data(station_id_bytes: bytes, data: bytes, raw: bytes) -> NNNPacket:
+def _parse_data(station_id_bytes: bytes, data: bytes, raw: bytes,
+                datum: str = "wgs84") -> NNNPacket:
     status = data[0:4]
     lat_s = data[4:10]
     lon_s = data[10:17]
@@ -123,6 +131,7 @@ def _parse_data(station_id_bytes: bytes, data: bytes, raw: bytes) -> NNNPacket:
         lat_tokyo=lat,
         lon_tokyo=lon,
         alt_m=alt,
+        datum=datum,
         raw=raw,
         in_range=in_range,
     )
@@ -135,8 +144,9 @@ class NNNPacketParser:
     前回の正常データを保持する(last_good)。
     """
 
-    def __init__(self):
+    def __init__(self, datum: str = "wgs84"):
         self._buf = bytearray()
+        self.datum = datum        # 生値の測地系("wgs84"=変換なし / "tokyo"=変換)
         self.packets_ok = 0
         self.packets_error = 0
         self.last_good: Optional[NNNPacket] = None
@@ -180,7 +190,7 @@ class NNNPacketParser:
                 continue
 
             try:
-                pkt = _parse_data(body[0:2], body[2 : 2 + DATA_LEN], frame)
+                pkt = _parse_data(body[0:2], body[2 : 2 + DATA_LEN], frame, self.datum)
             except ParseError as e:
                 self.packets_error += 1
                 self.last_error = str(e)

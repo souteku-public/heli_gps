@@ -180,6 +180,7 @@ def make_engine(args):
     """
     cfg = HeliConfig(fs=args.rate, baud=args.baud, channel=args.channel,
                      geo_mode=args.geo_mode, addr_level=args.addr_level,
+                     datum=getattr(args, "datum", "wgs84"),
                      stale_timeout=getattr(args, "stale_timeout", 5.0),
                      hold_timeout=getattr(args, "hold_timeout", 15.0))
     style = SuperStyle(font_size=args.font_size)
@@ -325,6 +326,8 @@ def build_parser():
     ap.add_argument("--channel", type=int, default=2, help="GPS音声ch(0始まり)")
     ap.add_argument("--geo-mode", default="offline", choices=["offline", "auto", "online"])
     ap.add_argument("--addr-level", default="muni", choices=["pref", "muni", "city", "town"])
+    ap.add_argument("--datum", default="wgs84", choices=["wgs84", "tokyo"],
+                    help="NNN座標の測地系。wgs84=変換なし(既定) / tokyo=WGS84へ変換")
     ap.add_argument("--font-size", type=int, default=90)
     ap.add_argument("--stale-timeout", type=float, default=5.0,
                     help="この秒数を超えたら『受信中』でないと判定")
