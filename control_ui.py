@@ -28,6 +28,7 @@ from pathlib import Path
 from tkinter import colorchooser, ttk
 
 from nnn_decoder.osc import osc_message, osc_parse
+from nnn_decoder.geodesy import deg_to_dms_str
 
 # 見た目・位置の既定を保存するファイル(control_ui.py と同じ場所)
 CONFIG_PATH = Path(__file__).with_name("ui_settings.json")
@@ -354,7 +355,11 @@ class ControlUI:
         self.recv_lbl = tk.Label(st, text="● 未受信", fg="white", bg="gray",
                                  font=("", 12, "bold")); self.recv_lbl.pack(fill="x", padx=6, pady=4)
         self.super_lbl = tk.Label(st, text="―", font=("", 18, "bold")); self.super_lbl.pack(pady=2)
-        self.info_lbl = tk.Label(st, text="緯度 --  経度 --  高度 --"); self.info_lbl.pack()
+        # 10進度とDMS(度分秒)を2行で表示
+        self.info_lbl = tk.Label(st, text="緯度 --  経度 --  高度 --",
+                                 justify="left"); self.info_lbl.pack(anchor="w", padx=6)
+        self.dms_lbl = tk.Label(st, text="DMS  緯度 --  経度 --",
+                                justify="left", fg="#555"); self.dms_lbl.pack(anchor="w", padx=6)
         self.fix_lbl = tk.Label(st, text="測位 --  衛星 --"); self.fix_lbl.pack(pady=2)
 
     def _build_font(self, parent):
@@ -621,7 +626,10 @@ class ControlUI:
             self.super_lbl.config(text=args[0] or "(表示なし)")
             self._redraw_canvas()
         elif a == "/heli/position" and len(args) >= 3:
-            self.info_lbl.config(text=f"緯度 {args[0]:.5f}  経度 {args[1]:.5f}  高度 {args[2]:.0f}m")
+            lat, lon, alt = args[0], args[1], args[2]
+            self.info_lbl.config(text=f"緯度 {lat:.6f}  経度 {lon:.6f}  高度 {alt:.0f}m")
+            self.dms_lbl.config(text=f"DMS  緯度 {deg_to_dms_str(lat)}  "
+                                     f"経度 {deg_to_dms_str(lon)}")
         elif a == "/heli/status" and len(args) >= 3:
             # 新形式: (受信中1/0, 測位, 衛星)。受信可否で色分け。
             receiving = bool(args[0])
