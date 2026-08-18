@@ -1,0 +1,27 @@
+{
+  "presets": [
+    {
+      "name": "番組1",
+      "settings": {
+        "font_name": "ipag",
+        "font_size": 90,
+        "align_x": "left",
+        "fill": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "stroke": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "stroke_width": 5,
+        "pos": [
+          480,
+          900
+        ]
+      }
+    }
+  ]
+}

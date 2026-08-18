@@ -12,7 +12,9 @@ TouchDesigner版・GStreamer版どちらも、同じOSCプロトコルで操作�
     - 受信状態・現在のスーパー・緯度経度をライブ表示
 
 起動:  python control_ui.py   [--td-host 192.168.0.10]
-依存:  標準ライブラリのみ(tkinter, socket)
+依存:  tkinter(必須)。配置のWYSIWYGプレビューには numpy/Pillow(ImageTk)、
+       オフライン地図には同梱の境界データを使う。無ければ簡易表示に自動で
+       フォールバックする。
 """
 
 from __future__ import annotations
@@ -57,6 +59,26 @@ try:
     from gst_heli.fonts import list_system_fonts
 except Exception:
     list_system_fonts = None
+
+# 本番と同じ Pillow レンダラで配置プレビューを描く(WYSIWYG)。
+# 依存(numpy/Pillow/ImageTk)が無ければ簡易テキスト表示にフォールバック。
+try:
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageTk
+    from gst_heli.renderer import SuperRenderer, SuperStyle
+    HAVE_WYSIWYG = True
+except Exception:
+    HAVE_WYSIWYG = False
+
+try:
+    import ui_theme
+except Exception:
+    ui_theme = None
+
+try:
+    from ui_map import MapWindow
+except Exception:
+    MapWindow = None
 
 GEOMODE = [("オフライン(ネット不要)", "offline"), ("自動(ネット時は町丁目)", "auto"),
            ("オンライン(地理院API)", "online")]
@@ -132,6 +154,19 @@ class ControlUI:
         self._dragging = False
         self._drag_off = (0, 0)
         self._ghost_box = None
+        self._telop_bbox = None          # 配置プレビュー上のテロップ矩形(当たり判定)
+        self.map_win = None              # 地図ウィンドウ(開いていれば)
+        self._palette = getattr(root, "_palette", None)
+        # WYSIWYGプレビュー用のレンダラと背景
+        self._pv_scale = CANVAS_W / FRAME_W
+        if HAVE_WYSIWYG:
+            try:
+                self._pv_renderer = SuperRenderer(CANVAS_W, CANVAS_H, SuperStyle())
+                self._backdrop = self._make_backdrop()
+            except Exception:
+                self._pv_renderer = None
+        else:
+            self._pv_renderer = None
         # 見た目・配置の変更は「決定」ボタンを押すまで送らずに溜めておく。
         # (address:args の辞書。同じ宛先は最新値で上書き)
         self._pending: dict = {}
@@ -209,7 +244,8 @@ class ControlUI:
         """縦スクロール可能な内側フレームを返す(小さい画面でも全項目に届く)."""
         outer = ttk.Frame(self.root)
         outer.pack(side="top", fill="both", expand=True)
-        sc = tk.Canvas(outer, highlightthickness=0)
+        _bg = (self._palette or {}).get("bg", "#f5f5f7")
+        sc = tk.Canvas(outer, highlightthickness=0, bg=_bg)
         vsb = ttk.Scrollbar(outer, orient="vertical", command=sc.yview)
         body = ttk.Frame(sc)
         body.bind("<Configure>", lambda _e: sc.configure(scrollregion=sc.bbox("all")))
@@ -279,32 +315,51 @@ class ControlUI:
         self._stage("/heli/ctrl/Alignx", ax)
         self._redraw_canvas()
 
+    def _make_backdrop(self):
+        """WYSIWYGプレビューの背景(暗色+セーフエリア目安)を作る."""
+        bg = Image.new("RGB", (CANVAS_W, CANVAS_H), (34, 38, 52))
+        d = ImageDraw.Draw(bg)
+        for i in range(CANVAS_H):            # ゆるいグラデーション
+            t = i / CANVAS_H
+            d.line([(0, i), (CANVAS_W, i)],
+                   fill=(int(34 + 8 * t), int(38 + 8 * t), int(52 + 10 * t)))
+        d.rectangle([CANVAS_W * 0.05, CANVAS_H * 0.05,
+                     CANVAS_W * 0.95, CANVAS_H * 0.95], outline=(96, 104, 128))
+        d.line([(0, CANVAS_H * 2 / 3), (CANVAS_W, CANVAS_H * 2 / 3)],
+               fill=(70, 78, 100))
+        return np.asarray(bg, dtype=np.uint8)
+
     def _build_place(self, parent):
         s = self._section(parent, "配置")
-        ttk.Label(s, text="文字をつかんでドラッグ(離すと確定)。空白クリックでそこへ中央移動。"
-                          "矢印キーで微調整").pack(pady=4)
-        self.canvas = tk.Canvas(s, width=CANVAS_W, height=CANVAS_H, bg="#334",
-                                highlightthickness=1, highlightbackground="#888",
-                                takefocus=1)
+        mode = "実フォントでプレビュー表示" if self._pv_renderer else "簡易表示"
+        ttk.Label(s, text=f"文字をつかんでドラッグ(離すと確定)。空白クリックで中央移動。"
+                          f"矢印キーで微調整。［{mode}］", style="Muted.TLabel").pack(pady=4)
+        self.canvas = tk.Canvas(s, width=CANVAS_W, height=CANVAS_H, bg="#22262f",
+                                highlightthickness=0, takefocus=1)
         self.canvas.pack(pady=6)
-        self.pos_lbl = ttk.Label(s, text="")
+        self.pos_lbl = ttk.Label(s, text="", style="Muted.TLabel")
         self.pos_lbl.pack(anchor="w", padx=2)
-        self.canvas.create_rectangle(2, 2, CANVAS_W - 2, CANVAS_H - 2, outline="#aaa")
-        # セーフエリア目安
-        self.canvas.create_rectangle(CANVAS_W * 0.05, CANVAS_H * 0.05,
-                                     CANVAS_W * 0.95, CANVAS_H * 0.95,
-                                     outline="#556", dash=(3, 3))
-        # ドラッグ中に出す半透明ゴースト枠(最初は隠しておく)
-        self._ghost_box = self.canvas.create_rectangle(0, 0, 0, 0, outline="#0cf",
+
+        if self._pv_renderer:
+            # WYSIWYG: 1枚の画像アイテムに本番同等の描画を貼る
+            self._img_item = self.canvas.create_image(0, 0, anchor="nw")
+            self._photo = None
+        else:
+            # フォールバック: tkのテキストで簡易表示
+            self.canvas.create_rectangle(2, 2, CANVAS_W - 2, CANVAS_H - 2, outline="#aaa")
+            self.canvas.create_rectangle(CANVAS_W * 0.05, CANVAS_H * 0.05,
+                                         CANVAS_W * 0.95, CANVAS_H * 0.95,
+                                         outline="#556", dash=(3, 3))
+            self.txt_shadow = self.canvas.create_text(0, 0, anchor="nw", text="", fill="black")
+            self.txt_item = self.canvas.create_text(0, 0, anchor="nw", text="", fill="white")
+
+        # ドラッグ中に出すゴースト枠(最初は隠しておく)
+        self._ghost_box = self.canvas.create_rectangle(0, 0, 0, 0, outline="#0a84ff",
                                                         dash=(3, 2), width=2,
                                                         state="hidden")
-        self.txt_shadow = self.canvas.create_text(0, 0, anchor="nw", text="", fill="black")
-        self.txt_item = self.canvas.create_text(0, 0, anchor="nw", text="", fill="white")
-        for it in (self.txt_item, self.txt_shadow):
-            self.canvas.tag_bind(it, "<ButtonPress-1>", self._drag_start)
-            self.canvas.tag_bind(it, "<B1-Motion>", self._drag_move)
-            self.canvas.tag_bind(it, "<ButtonRelease-1>", self._drag_end)
-        self.canvas.bind("<Button-1>", self._canvas_click)   # 空白クリックで中央移動
+        # 当たり判定はテロップ矩形(self._telop_bbox)で行うキャンバス全体バインド
+        self.canvas.bind("<ButtonPress-1>", self._press)
+        self.canvas.bind("<B1-Motion>", self._drag_move)
         self.canvas.bind("<ButtonRelease-1>", self._drag_end)
         # 矢印キーで1px(Shiftで10px)微調整。テキスト入力中は邪魔しない。
         for key, dx, dy in (("<Up>", 0, -1), ("<Down>", 0, 1),
@@ -340,27 +395,50 @@ class ControlUI:
     def _build_apply_bar(self):
         # 見た目・配置(フォント/文字サイズ/色/フチ/位置)の変更は、ここを押す
         # まで送出側に反映しない。誤操作で本番のスーパーが即変わるのを防ぐ。
-        ap = ttk.Frame(self.root); ap.pack(side="bottom", fill="x", padx=6, pady=(2, 2))
+        ap = ttk.Frame(self.root); ap.pack(side="bottom", fill="x", padx=10, pady=(2, 4))
         self.apply_btn = ttk.Button(ap, text="決定（反映）", state="disabled",
-                                    command=self._apply_pending)
+                                    style="Accent.TButton", command=self._apply_pending)
         self.apply_btn.pack(side="left", fill="x", expand=True)
         # 現在の見た目・位置を次回起動時の既定として保存
         self.save_btn = ttk.Button(ap, text="既定として保存", width=14,
                                    command=self._save_settings)
         self.save_btn.pack(side="right")
+        if MapWindow is not None:
+            ttk.Button(ap, text="地図", width=6,
+                       command=self._open_map).pack(side="right", padx=(0, 6))
+
+    def _open_map(self):
+        if MapWindow is None:
+            return
+        if self.map_win is not None and self.map_win.alive():
+            try:
+                self.map_win.top.lift()
+            except Exception:
+                pass
+            return
+        try:
+            self.map_win = MapWindow(self.root, self._palette)
+        except Exception:
+            self.map_win = None
 
     def _build_status(self):
+        pal = self._palette or {}
+        bg = pal.get("bg", "#f5f5f7"); ink = pal.get("ink", "#1d1d1f")
+        muted = pal.get("muted", "#6e6e73"); fam = pal.get("family", "")
         st = ttk.LabelFrame(self.root, text="受信状態")
-        st.pack(side="bottom", fill="x", padx=6, pady=6)
-        self.recv_lbl = tk.Label(st, text="● 未受信", fg="white", bg="gray",
-                                 font=("", 12, "bold")); self.recv_lbl.pack(fill="x", padx=6, pady=4)
-        self.super_lbl = tk.Label(st, text="―", font=("", 18, "bold")); self.super_lbl.pack(pady=2)
+        st.pack(side="bottom", fill="x", padx=10, pady=8)
+        self.recv_lbl = tk.Label(st, text="● 未受信", fg="white",
+                                 bg=pal.get("neutral", "#8e8e93"),
+                                 font=(fam, 12, "bold")); self.recv_lbl.pack(fill="x", padx=6, pady=4)
+        self.super_lbl = tk.Label(st, text="―", font=(fam, 18, "bold"),
+                                  bg=bg, fg=ink); self.super_lbl.pack(pady=2)
         # 10進度とDMS(度分秒)を2行で表示
-        self.info_lbl = tk.Label(st, text="緯度 --  経度 --  高度 --",
-                                 justify="left"); self.info_lbl.pack(anchor="w", padx=6)
-        self.dms_lbl = tk.Label(st, text="DMS  緯度 --  経度 --",
-                                justify="left", fg="#555"); self.dms_lbl.pack(anchor="w", padx=6)
-        self.fix_lbl = tk.Label(st, text="測位 --  衛星 --"); self.fix_lbl.pack(pady=2)
+        self.info_lbl = tk.Label(st, text="緯度 --  経度 --  高度 --", justify="left",
+                                 bg=bg, fg=ink); self.info_lbl.pack(anchor="w", padx=6)
+        self.dms_lbl = tk.Label(st, text="DMS  緯度 --  経度 --", justify="left",
+                                bg=bg, fg=muted); self.dms_lbl.pack(anchor="w", padx=6)
+        self.fix_lbl = tk.Label(st, text="測位 --  衛星 --", bg=bg,
+                                fg=muted); self.fix_lbl.pack(pady=2)
 
     def _build_font(self, parent):
         fr = ttk.Frame(parent); fr.pack(fill="x", pady=3)
@@ -529,36 +607,39 @@ class ControlUI:
         """現在の基準点(pos)のキャンバス座標."""
         return (self.pos[0] / SCALE, self.pos[1] / SCALE)
 
-    def _drag_start(self, e):
-        # つかんだ点と基準点のズレを記録(文字が角にジャンプしないように)
+    def _telop_hit(self, x, y) -> bool:
+        bb = self._telop_bbox
+        return bool(bb and bb[0] - 4 <= x <= bb[2] + 4 and bb[1] - 4 <= y <= bb[3] + 4)
+
+    def _press(self, e):
         self.canvas.focus_set()          # 以後の矢印キーは位置調整へ
-        ax, ay = self._anchor_canvas()
-        self._drag_off = (e.x - ax, e.y - ay)
-        self._dragging = True
-        self._redraw_canvas()
-        return "break"          # 空白クリック用ハンドラを抑止
+        if self._telop_hit(e.x, e.y):
+            # つかんだ点と基準点のズレを記録(文字が角にジャンプしないように)
+            ax, ay = self._anchor_canvas()
+            self._drag_off = (e.x - ax, e.y - ay)
+            self._dragging = True
+            self._redraw_canvas()
+        else:
+            # 空白クリック: そこを文字の中央にする(角ではなく中央=直感的)
+            self._place_center(e.x, e.y)
 
     def _drag_move(self, e):
+        if not self._dragging:
+            return
         ox, oy = self._drag_off
         cx = max(0, min(CANVAS_W, e.x - ox))
         cy = max(0, min(CANVAS_H, e.y - oy))
         self.pos = [int(cx * SCALE), int(cy * SCALE)]
         self._redraw_canvas(); self._send_pos()
-        return "break"
 
     def _drag_end(self, _e=None):
         if self._dragging:
             self._dragging = False
             self._redraw_canvas()
 
-    def _canvas_click(self, e):
-        # 空白クリック: そこを文字の中央にする(角ではなく中央=直感的)
-        self.canvas.focus_set()          # 以後の矢印キーは位置調整へ
-        self._place_center(e.x, e.y)
-
     def _place_center(self, cxp, cyp):
         """キャンバス座標(cxp,cyp)を文字の中央に合わせて基準点を決める."""
-        bb = self.canvas.bbox(self.txt_item)
+        bb = self._telop_bbox
         w = (bb[2] - bb[0]) if bb else 0
         h = (bb[3] - bb[1]) if bb else 0
         # アンカー(横)から中央へのオフセット: left=+w/2, center=0, right=-w/2
@@ -578,33 +659,73 @@ class ControlUI:
         self._stage("/heli/ctrl/Posy", float(self.pos[1]))
 
     def _redraw_canvas(self):
+        if getattr(self, "_pv_renderer", None):
+            self._render_wysiwyg()
+        elif hasattr(self, "txt_item"):
+            self._render_text()
+        self._update_ghost()
+        if hasattr(self, "pos_lbl"):
+            self.pos_lbl.config(text=f"位置  X: {self.pos[0]}  Y: {self.pos[1]}  px "
+                                     f"(文字をつかんで移動 / 矢印キー1px・Shiftで10px)")
+
+    def _render_wysiwyg(self):
+        """本番と同じ Pillow レンダラで配置プレビューを描く(WYSIWYG)."""
+        sc = self._pv_scale
+        st = self._pv_renderer.style
+        st.font_path = self._font_lut.get(self.font_var.get()) or None
+        st.font_size = max(6, int(round(self.font_size * sc)))
+        try:
+            sw = int(self.stroke_var.get())
+        except Exception:
+            sw = 0
+        st.stroke_width = max(0, int(round(sw * sc)))
+        st.color = tuple(int(c * 255) for c in self.fill)
+        st.stroke_color = tuple(int(c * 255) for c in self.stroke)
+        st.align_x = self.align_x
+        st.align_y = "top"
+        st.margin_x = int(round(self.pos[0] * sc))
+        st.margin_y = int(round(self.pos[1] * sc))
+        txt = self.super_text or "(プレビュー)"
+        try:
+            telop = self._pv_renderer.render(txt)         # H×W×4 RGBA
+            a = telop[:, :, 3:4].astype(np.float32) / 255.0
+            out = self._backdrop.astype(np.float32) * (1 - a) + \
+                telop[:, :, :3].astype(np.float32) * a
+            img = Image.fromarray(out.astype(np.uint8), "RGB")
+            self._photo = ImageTk.PhotoImage(img)
+            self.canvas.itemconfig(self._img_item, image=self._photo)
+            ys, xs = np.where(telop[:, :, 3] > 0)
+            self._telop_bbox = (int(xs.min()), int(ys.min()),
+                                int(xs.max()), int(ys.max())) if len(xs) else None
+        except Exception:
+            self._telop_bbox = None
+
+    def _render_text(self):
+        """フォールバック: tkのテキストで簡易表示."""
         cx, cy = self._anchor_canvas()
         csize = max(6, int(self.font_size / SCALE))
         font = ("", csize, "bold")
         txt = self.super_text or "(プレビュー)"
-        # 横揃えに合わせてアンカーを変える(左寄せ=左端基準/右寄せ=右端基準)
         anchor = {"left": "nw", "center": "n", "right": "ne"}.get(self.align_x, "nw")
-        # 文字は常に単色で描く(点描=stippleは移動時に残像が出るため使わない)
         self.canvas.itemconfig(self.txt_shadow, text=txt, fill=_hex(self.stroke),
                                font=font, anchor=anchor)
         self.canvas.itemconfig(self.txt_item, text=txt, fill=_hex(self.fill),
                                font=font, anchor=anchor)
         self.canvas.coords(self.txt_item, cx, cy)
         self.canvas.coords(self.txt_shadow, cx + 1, cy + 1)
-        # ドラッグ中は文字の外接枠を表示(位置合わせの目安)。枠のみで残像は出ない。
-        if self._ghost_box is not None:
-            if self._dragging:
-                bb = self.canvas.bbox(self.txt_item)
-                if bb:
-                    self.canvas.coords(self._ghost_box, bb[0] - 2, bb[1] - 2,
-                                       bb[2] + 2, bb[3] + 2)
-                    self.canvas.itemconfig(self._ghost_box, state="normal")
-            else:
-                self.canvas.itemconfig(self._ghost_box, state="hidden")
-        # 位置の数値表示(矢印キー微調整のフィードバック)
-        if hasattr(self, "pos_lbl"):
-            self.pos_lbl.config(text=f"位置  X: {self.pos[0]}  Y: {self.pos[1]}  px "
-                                     f"(枠内クリックで選択→矢印キーで1px調整 / Shiftで10px)")
+        self._telop_bbox = self.canvas.bbox(self.txt_item)
+
+    def _update_ghost(self):
+        # ドラッグ中は文字の外接枠を表示(位置合わせの目安)
+        if self._ghost_box is None:
+            return
+        if self._dragging and self._telop_bbox:
+            bb = self._telop_bbox
+            self.canvas.coords(self._ghost_box, bb[0] - 2, bb[1] - 2, bb[2] + 2, bb[3] + 2)
+            self.canvas.itemconfig(self._ghost_box, state="normal")
+            self.canvas.tag_raise(self._ghost_box)
+        else:
+            self.canvas.itemconfig(self._ghost_box, state="hidden")
 
     # ---------- 状態受信 ----------
     def _poll(self):
@@ -615,12 +736,14 @@ class ControlUI:
         except queue.Empty:
             pass
         # メッセージが途切れた=送出アプリが停止/未接続(GPS途絶とは区別)
+        pal = self._palette or {}
         if time.monotonic() - self._last_status > STALE_SEC:
-            self.recv_lbl.config(text="● アプリ未接続/停止", bg="gray")
+            self.recv_lbl.config(text="● アプリ未接続/停止", bg=pal.get("neutral", "gray"))
         self.root.after(200, self._poll)
 
     def _on_status(self, a, args):
         self._last_status = time.monotonic()   # アプリからの通信あり
+        pal = self._palette or {}
         if a == "/heli/super" and args:
             self.super_text = args[0]
             self.super_lbl.config(text=args[0] or "(表示なし)")
@@ -630,13 +753,19 @@ class ControlUI:
             self.info_lbl.config(text=f"緯度 {lat:.6f}  経度 {lon:.6f}  高度 {alt:.0f}m")
             self.dms_lbl.config(text=f"DMS  緯度 {deg_to_dms_str(lat)}  "
                                      f"経度 {deg_to_dms_str(lon)}")
+            # 地図ウィンドウが開いていれば位置を反映
+            if self.map_win is not None and self.map_win.alive():
+                try:
+                    self.map_win.update_position(lat, lon, self.super_text)
+                except Exception:
+                    pass
         elif a == "/heli/status" and len(args) >= 3:
             # 新形式: (受信中1/0, 測位, 衛星)。受信可否で色分け。
             receiving = bool(args[0])
             if receiving:
-                self.recv_lbl.config(text="● 受信中", bg="#2a2")
+                self.recv_lbl.config(text="● 受信中", bg=pal.get("ok", "#1a9d47"))
             else:
-                self.recv_lbl.config(text="● GPS途絶(直近を保持)", bg="#c33")
+                self.recv_lbl.config(text="● GPS途絶(直近を保持)", bg=pal.get("warn", "#d23b3b"))
             fix = {0: "正常", 1: "バックアップ", 2: "使用不能"}.get(args[1], "?")
             sats = "--" if args[2] < 0 else args[2]
             self.fix_lbl.config(text=f"測位 {fix}  衛星 {sats}")
@@ -650,6 +779,11 @@ def main():
     args = ap.parse_args()
     osc = OscClient(args.td_host, args.ctrl_port, args.status_port)
     root = tk.Tk()
+    if ui_theme is not None:
+        try:
+            root._palette = ui_theme.apply_theme(root)
+        except Exception:
+            root._palette = None
     ControlUI(root, osc)
     root.protocol("WM_DELETE_WINDOW", lambda: (osc.close(), root.destroy()))
     root.mainloop()

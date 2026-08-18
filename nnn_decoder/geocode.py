@@ -229,6 +229,18 @@ class OfflineMuniLookup:
             return cd, False
         return self.nearest_cd(lat, lon), True
 
+    def geoms_in_view(self, lon0: float, lat0: float, lon1: float, lat1: float):
+        """ビュー矩形(lon0..lon1, lat0..lat1)と交差する自治体を返す(地図描画用).
+
+        返り値: [(muniCd, rings), ...]  rings=[(xs, ys), ...]  (経度,緯度の列)
+        """
+        out = []
+        for cd, rings, bb in self._geoms:
+            if bb[2] < lon0 or bb[0] > lon1 or bb[3] < lat0 or bb[1] > lat1:
+                continue
+            out.append((cd, rings))
+        return out
+
 
 class ReverseGeocoder:
     """同期版逆ジオコーダ(キャッシュ・間引き付き).
