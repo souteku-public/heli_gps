@@ -83,7 +83,8 @@ except Exception:
 GEOMODE = [("オフライン(ネット不要)", "offline"), ("自動(ネット時は町丁目)", "auto"),
            ("オンライン(地理院API)", "online")]
 ADDRLEVEL = [("都道府県", "pref"), ("市町村(政令市は市まで)", "muni"),
-             ("市区町村(区あり)", "city"), ("町丁目(要ネット)", "town")]
+             ("市区町村(区あり)", "city"), ("市区町村(区・郡あり)", "citygun"),
+             ("町丁目(要ネット)", "town")]
 BAUD = [("1200 bps", "1200"), ("2400 bps", "2400")]
 FALLBACK_FONTS = [("Yu Gothic", r"C:\Windows\Fonts\YuGothM.ttc"),
                   ("Meiryo", r"C:\Windows\Fonts\meiryo.ttc"),

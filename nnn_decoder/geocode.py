@@ -34,6 +34,7 @@ from typing import Optional
 
 API_URL = "https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress"
 _MUNI_PATH = Path(__file__).parent / "data" / "muni.json"
+_GUN_PATH = Path(__file__).parent / "data" / "gun.json"
 _BOUNDARY_PATH = Path(__file__).parent / "data" / "muni_boundaries.json.gz"
 
 
@@ -44,6 +45,7 @@ class Address:
     town: str = ""     # 町丁目 (例 "幕張西三丁目")
     muni_cd: str = ""
     offshore: bool = False  # 海上(最寄り市町村)を指すか
+    gun: str = ""      # 郡 (町村のみ。例 "石狩郡")。市・区は空
 
     def _city_muni(self) -> str:
         """政令指定都市の区を省いた市町村名 ("千葉市美浜区"→"千葉市").
@@ -59,10 +61,11 @@ class Address:
         """表示用文字列.
 
         level:
-            'pref' … 都道府県
-            'muni' … 都道府県+市町村(政令市の区は省略) ※既定
-            'city' … 都道府県+市区町村(政令市の区も含む)
-            'town' … 都道府県+市区町村+町丁目(要オンライン)
+            'pref'    … 都道府県
+            'muni'    … 都道府県+市町村(政令市の区は省略) ※既定
+            'city'    … 都道府県+市区町村(政令市の区も含む)
+            'citygun' … 都道府県+郡+市区町村(区・郡あり)
+            'town'    … 都道府県+市区町村+町丁目(要オンライン)
         海上のときは市町村名の後ろに offshore_suffix("沖")を付す。
         """
         suf = offshore_suffix if self.offshore else ""
@@ -70,6 +73,8 @@ class Address:
             return f"{self.pref}{suf}"
         if level == "town" and self.town and not self.offshore:
             return f"{self.pref}{self.city}{self.town}"
+        if level == "citygun":
+            return f"{self.pref}{self.gun}{self.city}{suf}"
         city = self._city_muni() if level == "muni" else self.city
         return f"{self.pref}{city}{suf}"
 
@@ -77,6 +82,15 @@ class Address:
 def _load_muni_table() -> dict:
     with open(_MUNI_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _load_gun_table() -> dict:
+    """市町村コード→郡名(町村のみ)。無ければ空辞書."""
+    try:
+        with open(_GUN_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def _dist_m(lat1, lon1, lat2, lon2) -> float:
@@ -134,17 +148,31 @@ class OfflineMuniLookup:
 
         # 自治体ごとに全リング(外周+穴。偶奇則なので区別不要)を保持
         self._geoms: list[tuple[str, list, tuple]] = []  # (muniCd, rings, bbox)
+        # アーク→そのアークを使う都道府県コードの集合(県境判定用)
+        arc_pref: dict[int, set] = {}
         for g in d["geoms"]:
             if g["t"] == "M":  # MultiPolygon: ポリゴン列→リング列に平坦化
                 ring_sets = [r for poly in g["a"] for r in poly]
             else:              # Polygon
                 ring_sets = g["a"]
+            pref = g["c"][:-3] or g["c"]        # 市町村コード下3桁を除く=都道府県
+            for r in ring_sets:
+                for aid in r:
+                    arc_pref.setdefault(aid if aid >= 0 else ~aid, set()).add(pref)
             rings = [build_ring(r) for r in ring_sets]
             xmin = min(min(r[0]) for r in rings)
             xmax = max(max(r[0]) for r in rings)
             ymin = min(min(r[1]) for r in rings)
             ymax = max(max(r[1]) for r in rings)
             self._geoms.append((g["c"], rings, (xmin, ymin, xmax, ymax)))
+
+        # 県境アーク: 異なる都道府県の自治体が共有するアーク(海岸線=単独使用は除く)
+        self._pref_border_arcs: list[tuple[list, list, tuple]] = []
+        for idx, prefs in arc_pref.items():
+            if len(prefs) >= 2:
+                xs, ys = arcs[idx]
+                self._pref_border_arcs.append(
+                    (xs, ys, (min(xs), min(ys), max(xs), max(ys))))
 
         # グリッド索引
         self._grid: dict[tuple[int, int], list[int]] = {}
@@ -241,6 +269,15 @@ class OfflineMuniLookup:
             out.append((cd, rings))
         return out
 
+    def pref_borders_in_view(self, lon0: float, lat0: float, lon1: float, lat1: float):
+        """ビュー矩形と交差する都道府県境のアーク列を返す [(xs, ys), ...]."""
+        out = []
+        for xs, ys, bb in self._pref_border_arcs:
+            if bb[2] < lon0 or bb[0] > lon1 or bb[3] < lat0 or bb[1] > lat1:
+                continue
+            out.append((xs, ys))
+        return out
+
 
 class ReverseGeocoder:
     """同期版逆ジオコーダ(キャッシュ・間引き付き).
@@ -251,6 +288,7 @@ class ReverseGeocoder:
     def __init__(self, min_move_m: float = 150.0, min_interval_s: float = 1.0,
                  timeout_s: float = 3.0, mode: str = "offline"):
         self._muni = _load_muni_table()
+        self._gun = _load_gun_table()
         self.mode = mode
         self._offline: Optional[OfflineMuniLookup] = None
         if mode in ("offline", "auto"):
@@ -272,6 +310,10 @@ class ReverseGeocoder:
         e = self._muni.get(str(int(muni_cd))) if muni_cd else None
         return (e[0], e[1]) if e else None
 
+    def gun_name(self, muni_cd: str) -> str:
+        """市町村コードに対応する郡名(町村のみ。無ければ空)."""
+        return self._gun.get(str(int(muni_cd)), "") if muni_cd else ""
+
     def _query(self, lat: float, lon: float) -> Optional[Address]:
         q = urllib.parse.urlencode({"lat": f"{lat:.6f}", "lon": f"{lon:.6f}"})
         req = urllib.request.Request(f"{API_URL}?{q}",
@@ -286,7 +328,8 @@ class ReverseGeocoder:
         if names is None:
             return None
         return Address(pref=names[0], city=names[1],
-                       town=res.get("lv01Nm") or "", muni_cd=muni_cd)
+                       town=res.get("lv01Nm") or "", muni_cd=muni_cd,
+                       gun=self.gun_name(muni_cd))
 
     def _lookup_offline(self, lat: float, lon: float) -> Optional[Address]:
         cd, offshore = self._offline.locate(lat, lon)
@@ -296,7 +339,7 @@ class ReverseGeocoder:
         if names is None:
             return None
         return Address(pref=names[0], city=names[1], town="", muni_cd=cd,
-                       offshore=offshore)
+                       offshore=offshore, gun=self.gun_name(cd))
 
     def lookup(self, lat: float, lon: float, force: bool = False) -> Optional[Address]:
         """位置に対応する住所を返す(間引き条件内なら前回値をそのまま返す)."""

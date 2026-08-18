@@ -325,7 +325,8 @@ def build_parser():
     ap.add_argument("--channels", type=int, default=8, help="入力音声ch数")
     ap.add_argument("--channel", type=int, default=2, help="GPS音声ch(0始まり)")
     ap.add_argument("--geo-mode", default="offline", choices=["offline", "auto", "online"])
-    ap.add_argument("--addr-level", default="muni", choices=["pref", "muni", "city", "town"])
+    ap.add_argument("--addr-level", default="muni",
+                    choices=["pref", "muni", "city", "citygun", "town"])
     ap.add_argument("--datum", default="wgs84", choices=["wgs84", "tokyo"],
                     help="NNN座標の測地系。wgs84=変換なし(既定) / tokyo=WGS84へ変換")
     ap.add_argument("--font-size", type=int, default=90)

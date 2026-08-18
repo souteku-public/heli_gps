@@ -23,10 +23,13 @@ class MapWindow:
         p = palette or {}
         self.bg = "#0b1020"          # 地図の地(濃紺)
         self.land = "#1b2440"        # 陸(面)
-        self.line = "#3a4a78"        # 境界線
+        self.line = "#3a4a78"        # 市区町村境
+        self.prefc = "#64d2ff"       # 都道府県境(色を変える)
         self.heli = "#ff3b30"        # ヘリ(赤)
         self.trailc = "#ff9f0a"      # 軌跡(橙)
         self.ink = p.get("ink", "#e8e8ee")
+        self.label = "#aab4d4"       # 地名ラベル
+        self._muni = None            # コード→[pref, city]
 
         self.top = tk.Toplevel(parent)
         self.top.title("ヘリ位置 地図(オフライン)")
@@ -65,13 +68,24 @@ class MapWindow:
     # ---- データ読み込み(別スレッド。UI描画はメインスレッドの_tickで) ----
     def _load(self):
         try:
-            from nnn_decoder.geocode import OfflineMuniLookup
+            from nnn_decoder.geocode import OfflineMuniLookup, _load_muni_table
             lk = OfflineMuniLookup()
+            self._muni = _load_muni_table()
         except Exception as e:
             lk = None
             self._load_err = str(e)
         self.lookup = lk
         self._loading = False
+
+    def _name(self, cd: str) -> str:
+        """市区町村コード→市区町村名(短縮ラベル用)."""
+        if not self._muni:
+            return ""
+        try:
+            e = self._muni.get(str(int(cd)))
+        except Exception:
+            e = None
+        return e[1] if e else ""
 
     def _tick(self):
         # メインスレッドで読み込み完了を検知して1回描画(スレッド安全)
@@ -163,15 +177,45 @@ class MapWindow:
         lon0, lat0, lon1, lat1 = self._view_bbox()
         m = (lon1 - lon0) * 0.1
         geoms = self.lookup.geoms_in_view(lon0 - m, lat0 - m, lon1 + m, lat1 + m)
-        for _cd, rings in geoms:
+        labels = []                       # (cx, cy, wpx, name) ラベル候補
+        for cd, rings in geoms:
+            gx0 = gy0 = 1e9; gx1 = gy1 = -1e9
             for xs, ys in rings:
                 pts = []
                 for k in range(len(xs)):
                     x, y = self._project(xs[k], ys[k])
                     pts.append(x); pts.append(y)
+                    gx0 = min(gx0, x); gx1 = max(gx1, x)
+                    gy0 = min(gy0, y); gy1 = max(gy1, y)
                 if len(pts) >= 6:
                     c.create_polygon(*pts, fill=self.land, outline=self.line,
                                      width=1)
+            # 画面上で十分大きい自治体だけ地名ラベル候補に
+            if (gx1 - gx0) > 55 and (gy1 - gy0) > 22:
+                nm = self._name(cd)
+                if nm:
+                    labels.append(((gx0 + gx1) / 2, (gy0 + gy1) / 2, gx1 - gx0, nm))
+
+        # 都道府県境(色を変えて上に描く)
+        for xs, ys in self.lookup.pref_borders_in_view(lon0 - m, lat0 - m,
+                                                        lon1 + m, lat1 + m):
+            pts = []
+            for k in range(len(xs)):
+                x, y = self._project(xs[k], ys[k])
+                pts.append(x); pts.append(y)
+            if len(pts) >= 4:
+                c.create_line(*pts, fill=self.prefc, width=2)
+
+        # 地名ラベル(近い順に最大30件。重なりは簡易間引き)
+        placed = []
+        for cx, cy, wpx, nm in sorted(
+                labels, key=lambda t: (t[0] - self.W / 2) ** 2 + (t[1] - self.H / 2) ** 2):
+            if len(placed) >= 30:
+                break
+            if any(abs(cx - px) < 46 and abs(cy - py) < 16 for px, py in placed):
+                continue
+            placed.append((cx, cy))
+            c.create_text(cx, cy, text=nm, fill=self.label, font=("", 9))
 
         # 軌跡
         if len(self.trail) >= 2:
@@ -181,12 +225,24 @@ class MapWindow:
                 tp.append(x); tp.append(y)
             c.create_line(*tp, fill=self.trailc, width=2, smooth=True)
 
-        # 現在位置マーカー
+        # 現在位置マーカー + 現在地の地名(読みやすいよう座布団付き)
         if self._last_pos is not None:
             x, y = self._project(*self._last_pos)
             c.create_line(x - 12, y, x + 12, y, fill=self.heli, width=1)
             c.create_line(x, y - 12, x, y + 12, fill=self.heli, width=1)
             c.create_oval(x - 6, y - 6, x + 6, y + 6, outline=self.heli, width=2)
+            place = (self._addr or "").replace("上空", "")
+            if place:
+                tx, ty = x + 12, y - 14
+                tid = c.create_text(tx, ty, text=place, anchor="w",
+                                    fill="#ffffff", font=("", 12, "bold"))
+                bb = c.bbox(tid)
+                if bb:
+                    pad = 4
+                    rid = c.create_rectangle(bb[0] - pad, bb[1] - 2, bb[2] + pad,
+                                             bb[3] + 2, fill="#000000",
+                                             outline=self.heli)
+                    c.tag_lower(rid, tid)
 
         # スケールバー(概算)
         px_lon, _ = self._scales()

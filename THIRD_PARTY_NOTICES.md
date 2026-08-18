@@ -23,6 +23,7 @@
 |---|---|---|
 | 市区町村境界データ | 「国土数値情報（行政区域データ）」（国土交通省）を加工して作成。加工元の簡略化データ: smartnews-smri/japan-topography (MIT) | オフライン住所判定 |
 | 市区町村コード表 | 国土地理院「地理院地図」muni.js に基づく | 市区町村コード→名称 |
+| 郡名テーブル (gun.json) | geolonia/japanese-addresses (CC0-1.0) の市区町村名から町村の郡名を抽出して作成 | 市区町村コード→郡名（区・郡あり表示） |
 | 逆ジオコーダAPI（online/autoモード時） | 国土地理院 逆ジオコーダ https://mreversegeocoder.gsi.go.jp/ | 町丁目の取得（利用時は出典表示） |
 
 ## フォント
