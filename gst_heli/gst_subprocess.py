@@ -94,7 +94,10 @@ class GstSubprocessBridge:
                  audio_port=5001, video_port=5002, gst_bin=None,
                  interlace=True, on_log=None,
                  preview=False, preview_width=960, preview_height=540,
-                 deinterlace=True, audio_debug=True, audio_timestamp=True):
+                 deinterlace=True, audio_debug=True, audio_timestamp=True,
+                 out_mode="fillkey", av_offset_ms=0):
+        self.out_mode = out_mode          # "fillkey"=Fill&Key / "burnin"=焼き込み
+        self.av_offset_ms = av_offset_ms  # バーンイン時の音声A/V補正(+で音声を遅らせる)
         self.preview = preview
         self.preview_width, self.preview_height = preview_width, preview_height
         self.deinterlace = deinterlace
@@ -166,6 +169,8 @@ class GstSubprocessBridge:
     def _build_cmd(self):
         if self.preview:
             return self._build_cmd_preview()
+        if self.out_mode == "burnin":
+            return self._build_cmd_burnin()
         return self._build_cmd_output()
 
     # 音声取得のブランチ(音声には映像入力が必須なので decklinkvideosrc も動かす)
@@ -233,6 +238,43 @@ class GstSubprocessBridge:
                       f"keyer-mode={self.keyer}"]
         vin = self._video_in(["fakesink", "sync=false"])
         return [self.gst, "-e"] + vin + self._audio_sink_branch() + video_out
+
+    # ---- バーンイン: 入力映像+音声にテロップを焼き込んで1本で出力 ----
+    def _audio_branch_burnin(self):
+        """入力音声を tee で分岐: (1)Pythonへ復調用 (2)出力へパススルー."""
+        dts = "true" if self.audio_timestamp else "false"
+        off_ns = int(self.av_offset_ms) * 1_000_000   # +で音声を遅らせA/V合わせ
+        return ["decklinkaudiosrc", f"device-number={self.in_device}",
+                "connection=embedded", f"channels={self.channels}",
+                f"do-timestamp={dts}", "!",
+                "audioconvert", "!",
+                f"audio/x-raw,format=S16LE,channels={self.channels},rate={self.rate}", "!",
+                "tee", "name=at",
+                # (1) 復調用(Python)。連続性優先で sync=false・非リーク無制限キュー
+                "at.", "!", "queue", "leaky=no", "max-size-buffers=0",
+                "max-size-bytes=0", "max-size-time=0", "!",
+                "tcpclientsink", "host=127.0.0.1", f"port={self.audio_port}", "sync=false",
+                # (2) 出力パススルー(埋め込み音声として送出)
+                "at.", "!", "queue", "!", "audioconvert", "!",
+                "decklinkaudiosink", f"device-number={self.out_device}",
+                f"ts-offset={off_ns}"]
+
+    def _build_cmd_burnin(self):
+        # 入力映像 → (任意deinterlace) → compositor.sink_0
+        vin_tail = ((["deinterlace", "!"] if self.deinterlace else [])
+                    + ["videoconvert", "!", "comp.sink_0"])
+        vin = self._video_in(vin_tail)
+        # テロップ(BGRA/α) → compositor.sink_1(アルファ合成で上に乗る)
+        telop = self._telop_src() + ["videoconvert", "!", "comp.sink_1"]
+        # 合成 → 番組映像として焼き込み出力(keyer=off)
+        comp = ["compositor", "name=comp", "background=black", "!", "videoconvert", "!"]
+        if self.interlace:
+            full = (f"video/x-raw,width={self.width},height={self.height},"
+                    f"framerate={self.framerate},interlace-mode=interleaved")
+            comp += ["capssetter", "join=false", f"caps={full}", "!", "videoconvert", "!"]
+        comp += ["decklinkvideosink", f"device-number={self.out_device}",
+                 f"mode={self.mode}", "video-format=8bit-yuv", "keyer-mode=off"]
+        return [self.gst, "-e"] + vin + telop + comp + self._audio_branch_burnin()
 
     def start(self):
         # サーバを先に立ててから gst を起動(接続先が居る状態にする)

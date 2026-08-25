@@ -240,7 +240,9 @@ def run(args):
             width=args.width, height=args.height, mode=args.mode,
             keyer=args.keyer, vconnection=args.vconnection, vmode=args.vmode,
             audio_port=args.audio_port, video_port=args.video_port,
-            gst_bin=args.gst_bin, interlace=not args.no_interlace)
+            gst_bin=args.gst_bin, interlace=not args.no_interlace,
+            deinterlace=args.deinterlace,
+            out_mode=args.output_mode, av_offset_ms=args.av_offset_ms)
         bridge.start()
         try:
             bridge.wait()
@@ -339,6 +341,13 @@ def build_parser():
     ap.add_argument("--height", type=int, default=1080)
     ap.add_argument("--mode", default="1080i5994", help="出力 信号フォーマット")
     ap.add_argument("--keyer", default="external", choices=["external", "internal", "off"])
+    ap.add_argument("--output-mode", default="fillkey", choices=["fillkey", "burnin"],
+                    help="fillkey=Fill&Key出し(外部キーヤー前提) / "
+                         "burnin=入力映像+音声にテロップを焼き込んで1本で出力")
+    ap.add_argument("--deinterlace", action="store_true",
+                    help="burnin時に入力をデインタレースして合成(既定OFF=iのまま重畳)")
+    ap.add_argument("--av-offset-ms", type=int, default=0,
+                    help="burnin時のA/V補正[ms](+で音声を遅らせる)")
     ap.add_argument("--in-device", type=int, default=0)
     ap.add_argument("--out-device", type=int, default=0)
     # backend / subprocess方式のオプション

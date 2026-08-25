@@ -1,11 +1,12 @@
 @echo off
 rem ============================================================
-rem  Heli GPS super (GStreamer) - ON-AIR launcher (FILL/KEY)
+rem  Heli GPS super (GStreamer) - BURN-IN launcher
 rem    - set GStreamer PATH automatically
-rem    - start sender (SDI in -> Fill/Key out, external keyer)
+rem    - start sender in BURN-IN mode
+rem        (input video + audio  ->  super burned in  ->  1 SDI out)
 rem    - start control UI (control_ui.py)
-rem  For burn-in (1 combined SDI out), use start_heli_burnin.bat.
-rem  Place in heli_gps folder (same level as control_ui.py).
+rem  No external keyer needed. Needs a full-duplex DeckLink and REF.
+rem  For Fill/Key output instead, use start_heli_gst.bat.
 rem ============================================================
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
@@ -13,9 +14,10 @@ cd /d "%~dp0"
 rem --- settings (edit for your site) ---
 set "CHANNEL=2"
 set "MODE=1080i5994"
-set "KEYER=external"
+set "VMODE=1080i5994"
 set "INDEV=0"
 set "OUTDEV=0"
+set "AVOFFSET=0"
 set "EXTRA="
 set "GST1=C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
 set "GST2=C:\gstreamer\1.0\msvc_x86_64\bin"
@@ -24,10 +26,10 @@ rem -------------------------------------
 call :setup_path || goto :err_gst
 where python >nul 2>&1 || goto :err_py
 
-echo Starting sender (console shows logs)...
-start "HeliGPS Sender" cmd /k python -m gst_heli.app --source decklink --output decklink ^
-    --output-mode fillkey --osc-control --channel %CHANNEL% --mode %MODE% --keyer %KEYER% ^
-    --in-device %INDEV% --out-device %OUTDEV% %EXTRA%
+echo Starting sender (BURN-IN: input video+audio with super, single SDI out)...
+start "HeliGPS Burn-in" cmd /k python -m gst_heli.app --source decklink --output decklink ^
+    --output-mode burnin --osc-control --channel %CHANNEL% --mode %MODE% --vmode %VMODE% ^
+    --in-device %INDEV% --out-device %OUTDEV% --av-offset-ms %AVOFFSET% %EXTRA%
 
 echo Starting control UI...
 where pythonw >nul 2>&1 && ( start "" pythonw control_ui.py ) || ( start "" python control_ui.py )
