@@ -7,22 +7,50 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-# フォント探索候補(Windows/Linux)。先頭から見つかったものを使う。
-_FONT_CANDIDATES = [
-    r"C:\Windows\Fonts\YuGothM.ttc",
+# 配布同梱フォント置き場(リポジトリ直下 fonts/)。ここが最優先。
+# SIL OFL / IPAライセンス等、再配布可のフォントのみ置くこと(fonts/README.md 参照)。
+_BUNDLED_FONT_DIR = Path(__file__).resolve().parent.parent / "fonts"
+
+# 再配布可(OFL/IPA)のフォント。放送・配布のライセンス面で安全なため優先する。
+_OFL_CANDIDATES = [
+    r"C:\Windows\Fonts\NotoSansJP-Bold.otf",
+    r"C:\Windows\Fonts\NotoSansJP-Regular.otf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
+    "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+    "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+]
+
+# 環境依存フォント(EULA要確認)。OFL系が見つからないときのみ使う。
+_SYSTEM_CANDIDATES = [
     r"C:\Windows\Fonts\YuGothB.ttc",
+    r"C:\Windows\Fonts\YuGothM.ttc",
     r"C:\Windows\Fonts\meiryo.ttc",
     r"C:\Windows\Fonts\msgothic.ttc",
     r"C:\Windows\Fonts\BIZ-UDPGothicR.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
 ]
+
+
+def bundled_fonts() -> list[str]:
+    """fonts/ に置かれた同梱フォント(あれば)を返す."""
+    try:
+        return sorted(str(p) for p in _BUNDLED_FONT_DIR.iterdir()
+                      if p.suffix.lower() in (".ttf", ".otf", ".ttc", ".otc"))
+    except Exception:
+        return []
+
+
+def font_candidates() -> list[str]:
+    """探索順: 同梱fonts/ → OFL/IPA → 環境依存フォント."""
+    return bundled_fonts() + _OFL_CANDIDATES + _SYSTEM_CANDIDATES
 
 
 @dataclass
@@ -81,13 +109,13 @@ class SuperRenderer:
             return user
         # 日本語が要るのに指定フォントが非対応 → 日本語対応の候補を探す
         if need_jp:
-            for p in _FONT_CANDIDATES:
+            for p in font_candidates():
                 if os.path.exists(p) and font_has_japanese(p):
                     return p
         # それでも無ければ: ユーザ指定 → 存在する最初の候補
         if user:
             return user
-        for p in _FONT_CANDIDATES:
+        for p in font_candidates():
             if os.path.exists(p):
                 return p
         return None
@@ -99,7 +127,7 @@ class SuperRenderer:
             return self._font_cache[key]
         font = None
         # 指定パス → 候補パス の順で、実際に読めるものを採用(消える事故を防ぐ)
-        for p in ([path] if path else []) + _FONT_CANDIDATES:
+        for p in ([path] if path else []) + font_candidates():
             if not p:
                 continue
             try:

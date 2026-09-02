@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import os
 
-# 探索するフォントディレクトリ(Windows/Linux/macOS)
+# 探索するフォントディレクトリ(同梱fonts/ を先頭に、以降 Windows/Linux/macOS)
 _FONT_DIRS = [
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fonts"),
     r"C:\Windows\Fonts",
     os.path.expanduser(r"~\AppData\Local\Microsoft\Windows\Fonts"),
     "/usr/share/fonts",
@@ -20,9 +21,15 @@ _FONT_DIRS = [
     "/Library/Fonts",
 ]
 
-# 日本語向けに優先して上位に出したいファイル名の一部(小文字比較)
-_JP_HINTS = ("yugoth", "yumin", "meiryo", "msgothic", "msmincho", "biz-ud",
-             "notosanscjk", "notoserifcjk", "ipag", "ipam", "hg")
+# 配布同梱フォント置き場(リポジトリ直下 fonts/)。一覧の最上位に出す。
+_BUNDLED_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "fonts")
+
+# 再配布可(SIL OFL / IPAライセンス)のフォント。配布・放送で安全なため最優先。
+_OFL_HINTS = ("noto", "ipag", "ipam", "ipaex", "sourcehan", "mplus", "m+")
+
+# その他の日本語フォント(環境依存・EULA要確認)
+_JP_HINTS = ("yugoth", "yumin", "meiryo", "msgothic", "msmincho", "biz-ud", "hg")
 
 # 字形の有無を判定するための相異なる漢字サンプル。
 # 日本語非対応フォントは、これらを全て同じ「.notdef(□)」で描くので、
@@ -90,10 +97,18 @@ def list_system_fonts(japanese_only: bool = True) -> list[tuple[str, str]]:
             continue
 
     def sort_key(item):
+        """同梱fonts/ → OFL/IPA → その他日本語 → 残り の順に並べる."""
         name, path = item
         base = os.path.basename(path).lower()
-        jp = 0 if any(h in base for h in _JP_HINTS) else 1
-        return (jp, name.lower())
+        if os.path.dirname(os.path.abspath(path)) == os.path.abspath(_BUNDLED_DIR):
+            rank = 0                                     # 同梱(配布物と同一の見た目)
+        elif any(h in base for h in _OFL_HINTS):
+            rank = 1                                     # 再配布可(OFL/IPA)
+        elif any(h in base for h in _JP_HINTS):
+            rank = 2                                     # 環境依存の日本語フォント
+        else:
+            rank = 3
+        return (rank, name.lower())
 
     items = sorted(found.items(), key=sort_key)
     if japanese_only:

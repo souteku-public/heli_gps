@@ -15,7 +15,6 @@ import csv
 import queue
 import threading
 import tkinter as tk
-import webbrowser
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
@@ -100,7 +99,7 @@ class DecoderApp:
         self.stop_btn = ttk.Button(btns, text="停止", command=self.stop, state="disabled")
         self.stop_btn.pack(side="left")
         ttk.Button(btns, text="デバイス再検索", command=self._refresh_devices).pack(side="left", padx=6)
-        ttk.Button(btns, text="地図で開く", command=self._open_map).pack(side="right", padx=6)
+        ttk.Button(btns, text="地図(オフライン)", command=self._open_map).pack(side="right", padx=6)
 
         lv = ttk.Frame(self.root)
         lv.pack(fill="x", **pad)
@@ -289,13 +288,23 @@ class DecoderApp:
         self.root.after(200, self._tick)
 
     def _open_map(self):
+        """同梱データによるオフライン地図を開く(外部サービスは使わない)."""
         with self._lock:
             pkt = self._last_pkt
         if pkt is None:
             messagebox.showinfo("地図", "まだ位置を受信していません。")
             return
-        webbrowser.open(
-            f"https://www.google.com/maps?q={pkt.lat_wgs84:.6f},{pkt.lon_wgs84:.6f}")
+        try:
+            from ui_map import MapWindow
+        except Exception:
+            messagebox.showinfo(
+                "地図",
+                f"緯度 {pkt.lat_wgs84:.6f}\n経度 {pkt.lon_wgs84:.6f}\n\n"
+                "オフライン地図モジュール(ui_map.py)が見つかりません。")
+            return
+        if getattr(self, "_map_win", None) is None or not self._map_win.alive():
+            self._map_win = MapWindow(self.root)
+        self._map_win.update_position(pkt.lat_wgs84, pkt.lon_wgs84)
 
 
 def main():

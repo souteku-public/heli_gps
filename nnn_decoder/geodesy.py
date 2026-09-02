@@ -1,7 +1,7 @@
 """測地系変換・座標ユーティリティ.
 
 NNNフォーマットの座標は東京測地系(Tokyo Datum)の度分秒。
-地図表示(Google Maps等)にはWGS84(世界測地系)へ変換して使う。
+地図表示にはWGS84(世界測地系)へ変換して使う。
 """
 
 from __future__ import annotations

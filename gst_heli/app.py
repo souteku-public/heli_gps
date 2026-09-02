@@ -116,6 +116,10 @@ def _font_name_to_path(name: str):
     """フォント名(UI選択)→ Windowsのフォントファイルパス(概略対応)."""
     import os
     table = {
+        # 再配布可(OFL)を優先
+        "Noto Sans JP Bold": "NotoSansJP-Bold.otf",
+        "Noto Sans JP": "NotoSansJP-Regular.otf",
+        # 環境依存(EULA要確認)
         "Yu Gothic UI": "YuGothM.ttc", "Yu Gothic": "YuGothB.ttc",
         "Meiryo": "meiryo.ttc", "MS Gothic": "msgothic.ttc",
         "BIZ UDPGothic": "BIZ-UDPGothicR.ttc", "游明朝": "yumin.ttf",

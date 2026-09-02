@@ -86,9 +86,13 @@ ADDRLEVEL = [("都道府県", "pref"), ("市町村(政令市は市まで)", "mun
              ("市区町村(区あり)", "city"), ("市区町村(区・郡あり)", "citygun"),
              ("町丁目(要ネット)", "town")]
 BAUD = [("1200 bps", "1200"), ("2400 bps", "2400")]
-FALLBACK_FONTS = [("Yu Gothic", r"C:\Windows\Fonts\YuGothM.ttc"),
-                  ("Meiryo", r"C:\Windows\Fonts\meiryo.ttc"),
-                  ("MS Gothic", r"C:\Windows\Fonts\msgothic.ttc")]
+# フォント列挙に失敗したときの最終手段。再配布可(OFL/IPA)を先に並べる。
+FALLBACK_FONTS = [("Noto Sans JP Bold", r"C:\Windows\Fonts\NotoSansJP-Bold.otf"),
+                  ("Noto Sans JP", r"C:\Windows\Fonts\NotoSansJP-Regular.otf"),
+                  ("Noto Sans CJK JP", "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+                  ("IPAGothic", "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf"),
+                  ("Yu Gothic", r"C:\Windows\Fonts\YuGothM.ttc"),
+                  ("Meiryo", r"C:\Windows\Fonts\meiryo.ttc")]
 
 STALE_SEC = 3.0
 FRAME_W, FRAME_H = 1920, 1080
