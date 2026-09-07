@@ -124,5 +124,16 @@ class HeliDecoder:
             "packets_ok": self.packets_ok,
         }
 
+    def boundary_lookup(self):
+        """住所判定に使っている境界データを返す(地図描画で再利用).
+
+        同じデータを二重に読み込まないため。オンラインモード等で
+        オフラインデータを持たない場合は None。
+        """
+        try:
+            return self._geo.offline
+        except Exception:
+            return None
+
     def close(self) -> None:
         self._geo.close()

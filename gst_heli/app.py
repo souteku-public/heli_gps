@@ -28,6 +28,8 @@ import numpy as np
 from nnn_decoder.osc import OscSender, osc_parse
 
 from .decoder_core import HeliConfig, HeliDecoder
+from .map_render import MapRenderer, MapStyle
+from .map_render import compose as map_compose
 from .renderer import SuperRenderer, SuperStyle
 
 
@@ -35,9 +37,10 @@ class OscControl:
     """control_ui.py からの /heli/ctrl/* を受けて cfg/style を更新."""
 
     def __init__(self, cfg: HeliConfig, style: SuperStyle, port: int = 9001,
-                 on_change=None):
+                 on_change=None, mstyle=None):
         self.cfg = cfg
         self.style = style
+        self.mstyle = mstyle        # MapStyle(地図スーパー). Noneなら地図制御は無効
         # 見た目・住所設定が変わったら呼ぶ(描画キャッシュ破棄の合図)。
         # これが無いと、文字列が変わるまで新しい見た目が反映されない。
         self.on_change = on_change
@@ -90,6 +93,25 @@ class OscControl:
             idx = {"Strokecolorr": 0, "Strokecolorg": 1, "Strokecolorb": 2}[name]
             self._stroke[idx] = int(max(0.0, min(1.0, float(val))) * 255)
             s.stroke_color = tuple(self._stroke)
+        elif name == "Fontweight":
+            s.font_weight = val or "Bold"
+        # ---- 地図スーパー(選択制) ----
+        elif name.startswith("Map") and self.mstyle is not None:
+            m = self.mstyle
+            if name == "Mapon":
+                m.on = bool(int(float(val)))
+            elif name == "Mapx":
+                m.x = int(float(val))
+            elif name == "Mapy":
+                m.y = int(float(val))
+            elif name == "Mapw":
+                m.w = max(80, int(float(val)))
+            elif name == "Maph":
+                m.h = max(60, int(float(val)))
+            elif name == "Mapspan":
+                m.span = max(0.02, min(3.0, float(val)))
+            elif name == "Maptrail":
+                m.trail = bool(int(float(val)))
 
     def _loop(self):
         while not self._stop:
@@ -191,32 +213,87 @@ def make_engine(args):
     decoder = HeliDecoder(cfg)
     renderer = SuperRenderer(args.width, args.height, style)
     status = StatusSender(args.status_host, args.status_port)
-    cache = {"text": None, "frame": np.zeros((args.height, args.width, 4), np.uint8),
-             "style_ver": 0, "drawn_ver": -1}
+    blank = np.zeros((args.height, args.width, 4), np.uint8)
+    mstyle = MapStyle(on=bool(getattr(args, "map_on", False)))
+    # 住所判定が読み込んだ境界データを再利用(二重読み込み・初回停止を回避)
+    maprend = MapRenderer(decoder.boundary_lookup())
+    cache = {"text": None, "telop": blank, "frame": blank,
+             "style_ver": 0, "drawn_ver": -1,
+             "map_img": None, "map_key": None, "trail": []}
+
+    def _prewarm_map():
+        # 地図をONにした瞬間に描画が数十ms止まらないよう、
+        # フォント読み込み等をバックグラウンドで温めておく。
+        try:
+            maprend.render(35.6, 139.7, MapStyle(w=mstyle.w, h=mstyle.h,
+                                                 span=mstyle.span), None)
+        except Exception:
+            pass
+    threading.Thread(target=_prewarm_map, daemon=True).start()
 
     def mark_dirty():
-        # 見た目/住所設定が変わった。バージョンを進めて次フレームで再描画。
+        # 見た目/住所/地図の設定が変わった。次フレームで再描画。
         cache["style_ver"] += 1
 
-    ctrl = (OscControl(cfg, style, args.ctrl_port, on_change=mark_dirty)
+    ctrl = (OscControl(cfg, style, args.ctrl_port, on_change=mark_dirty,
+                       mstyle=mstyle)
             if args.osc_control else None)
+
+    def _update_map(ver) -> bool:
+        """地図インセットを必要なら再描画。再描画したら True."""
+        if not mstyle.on:
+            if cache["map_img"] is not None:
+                cache["map_img"] = cache["map_key"] = None
+                return True
+            return False
+        st = decoder.status()
+        lat, lon = st["lat"], st["lon"]
+        if lat is None:
+            if cache["map_img"] is not None:
+                cache["map_img"] = cache["map_key"] = None
+                return True
+            return False
+        # 軌跡(一定距離動いたら点を足す)
+        tr = cache["trail"]
+        if not tr or (abs(tr[-1][0] - lon) + abs(tr[-1][1] - lat)) > 0.0005:
+            tr.append((lon, lat))
+            if len(tr) > 600:
+                del tr[:-600]
+        # 位置を約1px相当に量子化し、無駄な再描画(1枚10ms超)を避ける
+        q = max(1e-6, mstyle.span / 400.0)
+        key = (round(lon / q), round(lat / q), mstyle.w, mstyle.h,
+               round(mstyle.span, 5), mstyle.trail, len(tr) // 5, ver)
+        if key == cache["map_key"]:
+            return False
+        cache["map_key"] = key
+        cache["map_img"] = maprend.render(lat, lon, mstyle, tr)
+        return True
 
     def current_frame():
         text = decoder.current_text()
         ver = cache["style_ver"]
-        # 文字が変わった時 or 見た目設定が変わった時に再描画。
+        dirty = False
+        # 文字が変わった時 or 見た目設定が変わった時にテロップを再描画。
         # 後者が無いと「決定」を押しても位置が変わるまで反映されなかった。
         if text != cache["text"] or ver != cache["drawn_ver"]:
             cache["text"] = text
             cache["drawn_ver"] = ver
-            cache["frame"] = renderer.render(text)
+            cache["telop"] = renderer.render(text)
+            dirty = True
+        if _update_map(ver):
+            dirty = True
+        if dirty:
+            cache["frame"] = (map_compose(cache["telop"], cache["map_img"],
+                                          mstyle.x, mstyle.y)
+                              if cache["map_img"] is not None else cache["telop"])
         # 位置・状態は受信中は定期的に送る(StatusSender側で間引き)。
         # 住所文字が安定しても control_ui が途絶表示にならないようにするため。
         status.send(decoder, text)
         return cache["frame"]
 
-    return dict(cfg=cfg, style=style, decoder=decoder, renderer=renderer,
-                status=status, ctrl=ctrl, cache=cache, current_frame=current_frame)
+    return dict(cfg=cfg, style=style, mstyle=mstyle, decoder=decoder,
+                renderer=renderer, maprend=maprend, status=status, ctrl=ctrl,
+                cache=cache, current_frame=current_frame)
 
 
 def run(args):
@@ -333,6 +410,8 @@ def build_parser():
     ap.add_argument("--geo-mode", default="offline", choices=["offline", "auto", "online"])
     ap.add_argument("--addr-level", default="muni",
                     choices=["pref", "muni", "city", "citygun", "town"])
+    ap.add_argument("--map-on", action="store_true",
+                    help="地図スーパーを最初からONにする(既定OFF。UIで切替可)")
     ap.add_argument("--datum", default="wgs84", choices=["wgs84", "tokyo"],
                     help="NNN座標の測地系。wgs84=変換なし(既定) / tokyo=WGS84へ変換")
     ap.add_argument("--font-size", type=int, default=90)

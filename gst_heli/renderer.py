@@ -58,6 +58,9 @@ class SuperStyle:
     """テロップの見た目設定."""
     font_path: Optional[str] = None      # 明示指定(なければ候補から自動)
     font_size: int = 90
+    # 可変フォントのウェイト名(Thin/Light/Regular/Medium/SemiBold/Bold/Black 等)。
+    # 同梱の Noto Sans JP VF は可変なのでここで太さを決める。非可変なら無視。
+    font_weight: str = "Bold"
     color: tuple[int, int, int] = (255, 255, 255)
     # 水平: 基準点 margin_x に対して文字の left/center/right を合わせる。
     #   left  … 基準点=文字の左端(右へ伸びる)
@@ -122,7 +125,8 @@ class SuperRenderer:
 
     def _font(self, text: str = "") -> ImageFont.FreeTypeFont:
         path = self._resolve_font_path(text)
-        key = (path or "<default>", self.style.font_size)
+        weight = self.style.font_weight or ""
+        key = (path or "<default>", self.style.font_size, weight)
         if key in self._font_cache:
             return self._font_cache[key]
         font = None
@@ -139,6 +143,13 @@ class SuperRenderer:
                 continue
         if font is None:
             font = ImageFont.load_default()
+        # 可変フォント(Noto Sans JP VF等)ならウェイトを適用。
+        # テロップは既定Boldで太らせる(Regularだと放送で細く見える)。
+        if weight:
+            try:
+                font.set_variation_by_name(weight)
+            except Exception:
+                pass          # 可変フォントでない/その名前が無い場合は無視
         self._font_cache[key] = font
         return font
 

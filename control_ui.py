@@ -151,8 +151,15 @@ class ControlUI:
         self._init_stroke_width = int(saved.get("stroke_width", 5))
         self._init_font_name = saved.get("font_name", "")
         self.align_x = saved.get("align_x", "left")     # left/center/right
+        self._init_font_weight = saved.get("font_weight", "Bold")
         self.super_text = "(プレビュー)"
         self.pos = list(saved.get("pos", [480, 900]))   # フレーム座標(基準点, px)
+        # 地図スーパー(選択制)。既定OFF。ONにすると放送に出る
+        self.map_on = bool(saved.get("map_on", False))
+        self.map_pos = list(saved.get("map_pos", [1440, 690]))
+        self.map_w = int(saved.get("map_w", 420))
+        self.map_span = float(saved.get("map_span", 0.30))
+        self.map_trail = bool(saved.get("map_trail", True))
         # 番組プリセット(名前付き)。[{name, settings}, ...]
         self._presets = list(saved.get("presets", []))
         # ドラッグ中の状態(ゴースト表示・つかんだ位置のオフセット)
@@ -242,6 +249,7 @@ class ControlUI:
         self._build_addr(body)
         self._build_look(body)
         self._build_place(body)
+        self._build_map(body)
         self._build_presets(body)
         self._redraw_canvas()
 
@@ -297,10 +305,24 @@ class ControlUI:
         self._build_font(s)
         self.size_var = self._slider(s, "文字サイズ", "Fontsize", 20, 250, self.font_size,
                                      on_extra=self._on_size)
+        self._build_weight(s)
         self._build_align(s)
         self._build_colors(s)
         self.stroke_var = self._slider(s, "フチの太さ", "Strokewidth", 0, 20,
                                        self._init_stroke_width)
+
+    def _build_weight(self, parent):
+        """可変フォント(同梱 Noto Sans JP VF)の太さ。非可変フォントでは無効."""
+        fr = ttk.Frame(parent); fr.pack(fill="x", pady=3)
+        ttk.Label(fr, text="文字の太さ", width=16).pack(side="left")
+        vals = ["Light", "Regular", "Medium", "SemiBold", "Bold", "ExtraBold", "Black"]
+        self.weight_var = tk.StringVar(
+            value=self._init_font_weight if self._init_font_weight in vals else "Bold")
+        cb = ttk.Combobox(fr, textvariable=self.weight_var, values=vals,
+                          state="readonly", width=12)
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>",
+                lambda _e: self._stage("/heli/ctrl/Fontweight", self.weight_var.get()))
 
     def _build_align(self, parent):
         fr = ttk.Frame(parent); fr.pack(fill="x", pady=3)
@@ -358,6 +380,11 @@ class ControlUI:
             self.txt_shadow = self.canvas.create_text(0, 0, anchor="nw", text="", fill="black")
             self.txt_item = self.canvas.create_text(0, 0, anchor="nw", text="", fill="white")
 
+        # 地図スーパーの枠(ONのとき表示・ドラッグで位置決め)
+        self._map_box = self.canvas.create_rectangle(0, 0, 0, 0, outline="#64d2ff",
+                                                     width=2, state="hidden")
+        self._map_lbl = self.canvas.create_text(0, 0, text="地図", anchor="nw",
+                                                fill="#64d2ff", state="hidden")
         # ドラッグ中に出すゴースト枠(最初は隠しておく)
         self._ghost_box = self.canvas.create_rectangle(0, 0, 0, 0, outline="#0a84ff",
                                                         dash=(3, 2), width=2,
@@ -380,6 +407,75 @@ class ControlUI:
         step = 10 if (e.state & 0x1) else 1        # Shiftで10px
         self._nudge(dx * step, dy * step)
         return "break"
+
+    def _build_map(self, parent):
+        s = self._section(parent, "地図スーパー(選択制・既定OFF)")
+        ttk.Label(s, text="ONにすると放送に地図が出ます。出典表記は自動で焼き込まれます。",
+                  style="Muted.TLabel").pack(anchor="w", pady=(2, 6))
+
+        fr = ttk.Frame(s); fr.pack(fill="x", pady=3)
+        self.map_on_var = tk.BooleanVar(value=self.map_on)
+        ttk.Checkbutton(fr, text="地図スーパーを出す", variable=self.map_on_var,
+                        command=self._on_map_toggle).pack(side="left")
+        self.map_trail_var = tk.BooleanVar(value=self.map_trail)
+        ttk.Checkbutton(fr, text="軌跡を描く", variable=self.map_trail_var,
+                        command=self._on_map_trail).pack(side="left", padx=14)
+
+        # 大きさ(幅)。高さは 4:3 で連動
+        self.map_w_var = self._slider(s, "地図の大きさ(幅px)", "Mapw", 200, 800,
+                                      self.map_w, on_extra=self._on_map_size)
+        # 表示範囲(経度スパン)。整数スライダーの値/100 を度として送る
+        fr2 = ttk.Frame(s); fr2.pack(fill="x", pady=3)
+        ttk.Label(fr2, text="表示範囲(広さ)", width=16).pack(side="left")
+        self.map_span_var = tk.IntVar(value=int(round(self.map_span * 100)))
+
+        def emit_span():
+            try:
+                v = max(5, min(120, int(self.map_span_var.get())))
+            except Exception:
+                return
+            if v != self.map_span_var.get():
+                self.map_span_var.set(v)
+            self.map_span = v / 100.0
+            self._stage("/heli/ctrl/Mapspan", float(self.map_span))
+            self._redraw_canvas()
+        sb = ttk.Spinbox(fr2, from_=5, to=120, textvariable=self.map_span_var,
+                         width=5, command=emit_span)
+        sb.pack(side="right")
+        sb.bind("<Return>", lambda _e: emit_span())
+        sb.bind("<FocusOut>", lambda _e: emit_span())
+        ttk.Scale(fr2, from_=5, to=120, variable=self.map_span_var,
+                  command=lambda _v: emit_span()).pack(side="left", fill="x",
+                                                       expand=True, padx=4)
+        ttk.Label(s, text="※ 数字が小さいほど拡大(0.05〜1.2度)。位置は「配置」の枠を"
+                          "ドラッグして決めます。", style="Muted.TLabel").pack(anchor="w")
+
+    def _on_map_toggle(self):
+        self.map_on = bool(self.map_on_var.get())
+        self._stage("/heli/ctrl/Mapon", 1 if self.map_on else 0)
+        self._redraw_canvas()
+
+    def _on_map_trail(self):
+        self.map_trail = bool(self.map_trail_var.get())
+        self._stage("/heli/ctrl/Maptrail", 1 if self.map_trail else 0)
+
+    def _on_map_size(self, v):
+        self.map_w = int(v)
+        self._stage("/heli/ctrl/Maph", int(round(self.map_w * 0.75)))
+        self._redraw_canvas()
+
+    def _map_h(self) -> int:
+        return int(round(self.map_w * 0.75))
+
+    def _send_map_pos(self):
+        self._stage("/heli/ctrl/Mapx", float(self.map_pos[0]))
+        self._stage("/heli/ctrl/Mapy", float(self.map_pos[1]))
+
+    def _map_box_canvas(self):
+        """地図枠のキャンバス座標 (x0, y0, x1, y1)."""
+        x0 = self.map_pos[0] / SCALE
+        y0 = self.map_pos[1] / SCALE
+        return (x0, y0, x0 + self.map_w / SCALE, y0 + self._map_h() / SCALE)
 
     def _build_presets(self, parent):
         s = self._section(parent, "番組プリセット(名前を付けて保存/呼出)")
@@ -503,6 +599,15 @@ class ControlUI:
         self.osc.send("/heli/ctrl/Fontsize", int(self.size_var.get()))
         self.osc.send("/heli/ctrl/Strokewidth", int(self.stroke_var.get()))
         self.osc.send("/heli/ctrl/Alignx", self.align_x)
+        self.osc.send("/heli/ctrl/Fontweight", self.weight_var.get())
+        # 地図スーパー(選択制)
+        self.osc.send("/heli/ctrl/Mapon", 1 if self.map_on else 0)
+        self.osc.send("/heli/ctrl/Maptrail", 1 if self.map_trail else 0)
+        self.osc.send("/heli/ctrl/Mapw", int(self.map_w))
+        self.osc.send("/heli/ctrl/Maph", int(self._map_h()))
+        self.osc.send("/heli/ctrl/Mapspan", float(self.map_span))
+        self.osc.send("/heli/ctrl/Mapx", float(self.map_pos[0]))
+        self.osc.send("/heli/ctrl/Mapy", float(self.map_pos[1]))
         for comp, ch in (("r", 0), ("g", 1), ("b", 2)):
             self.osc.send(f"/heli/ctrl/Fontcolor{comp}", float(self.fill[ch]))
             self.osc.send(f"/heli/ctrl/Strokecolor{comp}", float(self.stroke[ch]))
@@ -514,6 +619,12 @@ class ControlUI:
             "font_name": self.font_var.get(),
             "font_size": int(self.size_var.get()),
             "align_x": self.align_x,
+            "font_weight": self.weight_var.get(),
+            "map_on": bool(self.map_on),
+            "map_pos": list(self.map_pos),
+            "map_w": int(self.map_w_var.get()),
+            "map_span": max(0.05, min(1.2, int(self.map_span_var.get()) / 100.0)),
+            "map_trail": bool(self.map_trail),
             "fill": list(self.fill),
             "stroke": list(self.stroke),
             "stroke_width": int(self.stroke_var.get()),
@@ -543,6 +654,19 @@ class ControlUI:
         self.stroke_sw.config(bg=_hex(self.stroke))
         self.stroke_var.set(int(d.get("stroke_width", self.stroke_var.get())))
         self.pos = list(d.get("pos", self.pos))
+        w = d.get("font_weight")
+        if w:
+            self.weight_var.set(w)
+        # 地図スーパー
+        self.map_on = bool(d.get("map_on", self.map_on))
+        self.map_on_var.set(self.map_on)
+        self.map_trail = bool(d.get("map_trail", self.map_trail))
+        self.map_trail_var.set(self.map_trail)
+        self.map_pos = list(d.get("map_pos", self.map_pos))
+        self.map_w = int(d.get("map_w", self.map_w))
+        self.map_w_var.set(self.map_w)
+        self.map_span = float(d.get("map_span", self.map_span))
+        self.map_span_var.set(int(round(self.map_span * 100)))
         self._redraw_canvas()
         self._broadcast_look()              # 呼出は即反映(決定不要)
         self._pending.clear(); self._mark_dirty()
@@ -616,13 +740,25 @@ class ControlUI:
         bb = self._telop_bbox
         return bool(bb and bb[0] - 4 <= x <= bb[2] + 4 and bb[1] - 4 <= y <= bb[3] + 4)
 
+    def _map_hit(self, x, y) -> bool:
+        if not self.map_on:
+            return False
+        x0, y0, x1, y1 = self._map_box_canvas()
+        return x0 - 3 <= x <= x1 + 3 and y0 - 3 <= y <= y1 + 3
+
     def _press(self, e):
         self.canvas.focus_set()          # 以後の矢印キーは位置調整へ
-        if self._telop_hit(e.x, e.y):
+        if self._map_hit(e.x, e.y):
+            # 地図枠をつかんで移動(つかんだ点を保持)
+            x0, y0, _x1, _y1 = self._map_box_canvas()
+            self._drag_off = (e.x - x0, e.y - y0)
+            self._dragging = "map"
+            self._redraw_canvas()
+        elif self._telop_hit(e.x, e.y):
             # つかんだ点と基準点のズレを記録(文字が角にジャンプしないように)
             ax, ay = self._anchor_canvas()
             self._drag_off = (e.x - ax, e.y - ay)
-            self._dragging = True
+            self._dragging = "telop"
             self._redraw_canvas()
         else:
             # 空白クリック: そこを文字の中央にする(角ではなく中央=直感的)
@@ -634,8 +770,12 @@ class ControlUI:
         ox, oy = self._drag_off
         cx = max(0, min(CANVAS_W, e.x - ox))
         cy = max(0, min(CANVAS_H, e.y - oy))
-        self.pos = [int(cx * SCALE), int(cy * SCALE)]
-        self._redraw_canvas(); self._send_pos()
+        if self._dragging == "map":
+            self.map_pos = [int(cx * SCALE), int(cy * SCALE)]
+            self._redraw_canvas(); self._send_map_pos()
+        else:
+            self.pos = [int(cx * SCALE), int(cy * SCALE)]
+            self._redraw_canvas(); self._send_pos()
 
     def _drag_end(self, _e=None):
         if self._dragging:
@@ -721,10 +861,23 @@ class ControlUI:
         self._telop_bbox = self.canvas.bbox(self.txt_item)
 
     def _update_ghost(self):
-        # ドラッグ中は文字の外接枠を表示(位置合わせの目安)
+        # 地図枠(ONのとき常時表示。ドラッグで位置決め)
+        if getattr(self, "_map_box", None) is not None:
+            if self.map_on:
+                x0, y0, x1, y1 = self._map_box_canvas()
+                self.canvas.coords(self._map_box, x0, y0, x1, y1)
+                self.canvas.coords(self._map_lbl, x0 + 3, y0 + 2)
+                self.canvas.itemconfig(self._map_box, state="normal")
+                self.canvas.itemconfig(self._map_lbl, state="normal")
+                self.canvas.tag_raise(self._map_box)
+                self.canvas.tag_raise(self._map_lbl)
+            else:
+                self.canvas.itemconfig(self._map_box, state="hidden")
+                self.canvas.itemconfig(self._map_lbl, state="hidden")
+        # 文字のドラッグ中は外接枠を表示(位置合わせの目安)
         if self._ghost_box is None:
             return
-        if self._dragging and self._telop_bbox:
+        if self._dragging == "telop" and self._telop_bbox:
             bb = self._telop_bbox
             self.canvas.coords(self._ghost_box, bb[0] - 2, bb[1] - 2, bb[2] + 2, bb[3] + 2)
             self.canvas.itemconfig(self._ghost_box, state="normal")

@@ -310,6 +310,11 @@ class ReverseGeocoder:
         e = self._muni.get(str(int(muni_cd))) if muni_cd else None
         return (e[0], e[1]) if e else None
 
+    @property
+    def offline(self):
+        """オフライン境界データ(地図描画などで再利用する)。無ければNone."""
+        return self._offline
+
     def gun_name(self, muni_cd: str) -> str:
         """市町村コードに対応する郡名(町村のみ。無ければ空)."""
         return self._gun.get(str(int(muni_cd)), "") if muni_cd else ""
@@ -395,6 +400,11 @@ class AsyncReverseGeocoder:
     @property
     def error_count(self) -> int:
         return self._geo.error_count
+
+    @property
+    def offline(self):
+        """オフライン境界データ(地図描画などで再利用する)。無ければNone."""
+        return self._geo.offline
 
     def submit(self, lat: float, lon: float) -> None:
         with self._cv:

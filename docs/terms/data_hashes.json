@@ -1,0 +1,22 @@
+{
+  "nnn_decoder/data/muni_boundaries.json.gz": {
+    "sha256": "db9b166e49f322f5b32c5793759e653917a18b9c3619640d5c7859ad1c667b67",
+    "bytes": 435090
+  },
+  "nnn_decoder/data/muni.json": {
+    "sha256": "c13d3512983dc761734fbaae4e9c2890faf68e577b65f1b703701c4ab6896b2c",
+    "bytes": 68071
+  },
+  "nnn_decoder/data/gun.json": {
+    "sha256": "62cc96ae71d30d5026be97ce8f32a04cb43117d06133fad8d8d8c0a1d6ac331d",
+    "bytes": 20618
+  },
+  "fonts/NotoSansJP-VF.ttf": {
+    "sha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+    "bytes": 9589900
+  },
+  "fonts/OFL.txt": {
+    "sha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9",
+    "bytes": 4388
+  }
+}
