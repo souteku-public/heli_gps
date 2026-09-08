@@ -1,32 +1,45 @@
-smartnews-smri/japan-topography
+smartnews-smri/japan-topography （市区町村・選挙区 地形データ）
 https://github.com/smartnews-smri/japan-topography
 
 同梱の市区町村境界データ (nnn_decoder/data/muni_boundaries.json.gz) は、
 本リポジトリが公開する簡略化データを再加工して作成しています。
 
-MIT License
+--------------------------------------------------------------------------
+【重要】ライセンスの実態について（2026-09-08 確認）
 
-Copyright (c) 2022 SmartNews Media Research Institute
+本リポジトリには LICENSE ファイルが存在せず（raw 取得 → 404）、README にも
+「MIT」等の定型ライセンス名の記載はありません。したがって本データの利用根拠は
+SmartNews 側の定型ライセンスではなく、
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+  (1) 原典である国土交通省「国土数値情報（行政区域データ）」の利用規約
+  (2) 下記 README「クレジット」節での明示的な許諾
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+の2つです。(1) が本質的な根拠であり、(2) は加工者クレジットの免除にあたります。
 
 --------------------------------------------------------------------------
-【元データの出典】
-「国土数値情報（行政区域データ）」（国土交通省）を加工して作成。
-元データの利用条件は国土数値情報の利用約款に従います。
+【README「クレジット」節の原文（2026-09-08 取得）】
+
+  - データを使用する際に、加工者としてスマートニュースおよびスマートニュース
+    メディア研究所の名前をクレジットする必要はありません。
+  - 商用・非商用にかかわらず、無償でお使いいただけます。
+  - ただし市区町村データは、国土交通省の指示するクレジット記載が必要です。
+    - その他、詳細は各データソースの利用規約を参照してください。
+
+【README「データソース」節の原文（2026-09-08 取得）】
+
+  - 市区町村データ：国土交通省 国土数値情報（行政区域）
+    https://nlftp.mlit.go.jp/ksj/ （2021年9月28日取得）
+
+【README「加工内容」節の原文（2026-09-08 取得）】
+
+  - 境界線を1％および0.1％に簡素化
+  - 飛び地はクリックですべて選択されるように、属性でグループ化
+  - 地形の属性（都道府県コード、選挙区コードなど）は元データに従う
+
+--------------------------------------------------------------------------
+【したがって必要な表記】
+
+  出典：「国土数値情報（行政区域データ）」（国土交通省）を加工して作成
+
+スマートニュースへのクレジットは不要（README で明示的に免除されている）。
+詳細は ../docs/ATTRIBUTION.md を参照。

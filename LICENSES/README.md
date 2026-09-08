@@ -10,13 +10,12 @@
 |---|---|---|---|
 | `numpy-LICENSE.txt` | numpy | BSD-3-Clause（同梱依存分を含む） | 配布パッケージから複製 |
 | `Pillow-LICENSE.txt` | Pillow | HPND（MIT系） | 配布パッケージから複製 |
-| `sounddevice-LICENSE.txt` | python-sounddevice | MIT | 標準MIT本文 ※要照合 |
-| `PortAudio-LICENSE.txt` | PortAudio（sounddeviceが利用） | MIT系 | 標準本文 ※要照合 |
-| `japan-topography-LICENSE.txt` | 市区町村境界データの加工元 | MIT ＋ 国土数値情報の出典 | ※要照合 |
+| `sounddevice-LICENSE.txt` | python-sounddevice | MIT | **上流 LICENSE を 2026-09-08 に取得して複製** |
+| `PortAudio-LICENSE.txt` | PortAudio（sounddeviceが利用） | MIT系 | **上流 LICENSE.txt を 2026-09-08 に取得して複製** |
+| `japan-topography-LICENSE.txt` | 市区町村境界データの加工元 | **定型ライセンスなし**（README で無償利用・クレジット不要を明示）＋ 国土数値情報の出典 | **2026-09-08 に確認・修正**（旧記載の「MIT」は誤り。LICENSE ファイルは存在しない） |
 
-> **※要照合** … 実際に配布するバージョンに付属するライセンス本文と
-> 突き合わせて確認・差し替えてください（バージョンで文言が変わることがあります）。
-> `numpy` / `Pillow` は実際の配布物から複製済みです。
+> `numpy` / `Pillow` は実際の配布物（dist-info）から複製済みです。
+> データの出典表記の詳細は `../docs/ATTRIBUTION.md` を参照してください。
 
 ## 追加が必要になるケース
 
@@ -35,11 +34,14 @@
 ## データの出典表記（配布物・必要に応じて番組クレジット）
 
 ```
-市区町村境界データ:
+市区町村境界データ（国土数値情報 行政区域データ N03 第3.0版 / N03-21_210101）:
   「国土数値情報（行政区域データ）」（国土交通省）を加工して作成
-  （簡略化: smartnews-smri/japan-topography, MIT）
-市区町村コード表:
-  国土地理院「地理院地図」muni.js に基づく
-郡名テーブル:
-  geolonia/japanese-addresses (CC0-1.0) より作成
+  （簡略化の加工元: smartnews-smri/japan-topography ※クレジット不要と明示）
+市区町村コード表（muni.json）:
+  国土地理院ウェブサイト（地理院地図 muni.js）を加工して作成
+郡名テーブル（gun.json）:
+  geolonia/japanese-addresses (CC0-1.0) より作成 ※表記義務なし
 ```
+
+放送・公衆送信時に必要なのは上の**2者（国土交通省・国土地理院）への出典表記**のみです。
+掲出先・文言は `../docs/ATTRIBUTION.md` §2 を参照。

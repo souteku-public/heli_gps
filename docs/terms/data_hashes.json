@@ -1,22 +1,63 @@
 {
-  "nnn_decoder/data/muni_boundaries.json.gz": {
-    "sha256": "db9b166e49f322f5b32c5793759e653917a18b9c3619640d5c7859ad1c667b67",
-    "bytes": 435090
+  "recorded": "2026-09-08",
+  "bundled_data": {
+    "nnn_decoder/data/muni_boundaries.json.gz": {
+      "sha256": "db9b166e49f322f5b32c5793759e653917a18b9c3619640d5c7859ad1c667b67",
+      "bytes": 435090
+    },
+    "nnn_decoder/data/muni.json": {
+      "sha256": "c13d3512983dc761734fbaae4e9c2890faf68e577b65f1b703701c4ab6896b2c",
+      "bytes": 68071
+    },
+    "nnn_decoder/data/gun.json": {
+      "sha256": "62cc96ae71d30d5026be97ce8f32a04cb43117d06133fad8d8d8c0a1d6ac331d",
+      "bytes": 20618
+    },
+    "fonts/NotoSansJP-VF.ttf": {
+      "sha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+      "bytes": 9589900
+    },
+    "fonts/OFL.txt": {
+      "sha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9",
+      "bytes": 4388
+    }
   },
-  "nnn_decoder/data/muni.json": {
-    "sha256": "c13d3512983dc761734fbaae4e9c2890faf68e577b65f1b703701c4ab6896b2c",
-    "bytes": 68071
-  },
-  "nnn_decoder/data/gun.json": {
-    "sha256": "62cc96ae71d30d5026be97ce8f32a04cb43117d06133fad8d8d8c0a1d6ac331d",
-    "bytes": 20618
-  },
-  "fonts/NotoSansJP-VF.ttf": {
-    "sha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
-    "bytes": 9589900
-  },
-  "fonts/OFL.txt": {
-    "sha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9",
-    "bytes": 4388
+  "terms_archive": {
+    "docs/terms/agreement_01.html": {
+      "sha256": "7e7db4f0e1872723cbdbb823655b423c3a81dc8a7115b986e17484e30fe16ef6",
+      "bytes": 62474
+    },
+    "docs/terms/agreement_01.txt": {
+      "sha256": "f30b37fccd59edd75b2d8a80c45c58eaeb57de704253526c398d764eb3934da4",
+      "bytes": 36427
+    },
+    "docs/terms/gsi_2930_index.txt": {
+      "sha256": "453b3dd7f6893a5e066b0c211f7bed889544c703f718289a519c1a1e88324497",
+      "bytes": 12027
+    },
+    "docs/terms/gsi_2930_meizi.txt": {
+      "sha256": "b900e2433b6911ddc93ab7216d9b62c3408f2c99ee0afba07f8efb1d1706b70a",
+      "bytes": 5458
+    },
+    "docs/terms/gsi_2930_qa.txt": {
+      "sha256": "61521fef950975c2c768c0c19747494498de37956049d85f27abcaa80314af31",
+      "bytes": 31212
+    },
+    "docs/terms/gsi_content_terms.html": {
+      "sha256": "5388d2854a05f3e7b41cb980ecfb2de75b315de68e0d9c94b9334c11e580739e",
+      "bytes": 23271
+    },
+    "docs/terms/gsi_content_terms.txt": {
+      "sha256": "d902c1954b921b15aa427e7ef0e077ffe7be4e76ffed7cb10490d3ae567539a7",
+      "bytes": 9472
+    },
+    "docs/terms/mlit_n03_v3_0_metadata.txt": {
+      "sha256": "7d5b6f0dca10358af1304d03db8575ef1be5a9df4f8987fa14fe8695985d562a",
+      "bytes": 997
+    },
+    "docs/terms/pdl_1.0.txt": {
+      "sha256": "f3539be8884a7e1e3aca3ec83fb78a589c8249ab6a74afd55ad86cdb53f5c2b6",
+      "bytes": 10882
+    }
   }
 }
