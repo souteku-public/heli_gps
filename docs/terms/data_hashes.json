@@ -1,5 +1,5 @@
 {
-  "recorded": "2026-09-08",
+  "recorded": "2026-09-24",
   "bundled_data": {
     "nnn_decoder/data/muni_boundaries.json.gz": {
       "sha256": "db9b166e49f322f5b32c5793759e653917a18b9c3619640d5c7859ad1c667b67",
@@ -50,6 +50,10 @@
     "docs/terms/gsi_content_terms.txt": {
       "sha256": "d902c1954b921b15aa427e7ef0e077ffe7be4e76ffed7cb10490d3ae567539a7",
       "bytes": 9472
+    },
+    "docs/terms/gsi_inquiry_91803.md": {
+      "sha256": "e27e402398984fdd3159d717aeddec1e31841aa4d2c00e57b8c5223a8d89a2ec",
+      "bytes": 8185
     },
     "docs/terms/mlit_n03_v3_0_metadata.txt": {
       "sha256": "7d5b6f0dca10358af1304d03db8575ef1be5a9df4f8987fa14fe8695985d562a",
