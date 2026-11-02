@@ -30,16 +30,28 @@ from nnn_decoder.osc import OscSender, osc_parse
 from .decoder_core import HeliConfig, HeliDecoder
 from .map_render import MapRenderer, MapStyle
 from .map_render import compose as map_compose
-from .renderer import SuperRenderer, SuperStyle
+from .renderer import (LayerSet, SuperRenderer, SuperStyle, build_layers,
+                       clock_text)
 
 
 class OscControl:
-    """control_ui.py からの /heli/ctrl/* を受けて cfg/style を更新."""
+    """control_ui.py からの /heli/ctrl/* を受けて cfg/style を更新.
+
+    レイヤ別の設定は接頭辞で振り分ける:
+        Super* … 住所テロップ(接頭辞なしの旧名も住所レイヤへ)
+        Clock* … 時刻
+        Station* … 局名
+    例: /heli/ctrl/Clockfontsize, /heli/ctrl/Stationposx
+    """
+
+    # 接頭辞 → レイヤ名。長い方から順に照合する(Station が St... と衝突しないよう)
+    _LAYER_PREFIX = (("Station", "station"), ("Clock", "clock"), ("Super", "addr"))
 
     def __init__(self, cfg: HeliConfig, style: SuperStyle, port: int = 9001,
-                 on_change=None, mstyle=None):
+                 on_change=None, mstyle=None, layers: LayerSet | None = None):
         self.cfg = cfg
-        self.style = style
+        self.style = style          # 住所レイヤ(= layers.addr と同一オブジェクト)
+        self.layers = layers        # LayerSet(時刻・局名を含む). Noneなら住所のみ
         self.mstyle = mstyle        # MapStyle(地図スーパー). Noneなら地図制御は無効
         # 見た目・住所設定が変わったら呼ぶ(描画キャッシュ破棄の合図)。
         # これが無いと、文字列が変わるまで新しい見た目が反映されない。
@@ -49,32 +61,34 @@ class OscControl:
         self._sock.bind(("0.0.0.0", port))
         self._sock.settimeout(0.3)
         self._stop = False
-        self._color = list(style.color)
-        self._stroke = list(style.stroke_color)
+        # 色は成分ごとに届くので、レイヤ別に途中経過を持っておく
+        self._color: dict[str, list] = {}
+        self._stroke: dict[str, list] = {}
         threading.Thread(target=self._loop, daemon=True).start()
 
-    def _apply(self, name, val):
-        c, s = self.cfg, self.style
-        if name == "Geomode":
-            c.geo_mode = val          # 反映には再起動が必要(geocoderはmode固定)
-        elif name == "Addrlevel":
-            c.addr_level = val
-        elif name == "Textformat":
-            c.text_format = val or "{address}上空"
-        elif name == "Staletext":
-            c.stale_text = val
-        elif name == "Audiochan":
-            c.channel = int(val)
-        elif name == "Fontsize":
-            s.font_size = int(val)
+    # ---- レイヤの取得 ----
+    def _style_of(self, layer: str) -> SuperStyle | None:
+        if layer == "addr":
+            return self.style
+        if self.layers is None:
+            return None
+        return self.layers.style(layer)
+
+    def _apply_layer(self, layer: str, name: str, val) -> None:
+        """1レイヤぶんの見た目設定を適用する(接頭辞を外した名前で来る)."""
+        s = self._style_of(layer)
+        if s is None:
+            return
+        if name == "Fontsize":
+            s.font_size = max(6, int(float(val)))
         elif name == "Alignx":
             s.align_x = val
         elif name == "Aligny":
             s.align_y = val
         elif name == "Posx":
-            s.margin_x = int(val)
+            s.margin_x = int(float(val))
         elif name == "Posy":
-            s.margin_y = int(val)
+            s.margin_y = int(float(val))
         elif name == "Fontpath":
             s.font_path = val or None       # UIが実ファイルパスを直接指定
         elif name == "Font":
@@ -84,19 +98,57 @@ class OscControl:
                 if p:
                     s.font_path = p
         elif name == "Strokewidth":
-            s.stroke_width = int(val)
-        elif name in ("Fontcolorr", "Fontcolorg", "Fontcolorb"):
-            idx = {"Fontcolorr": 0, "Fontcolorg": 1, "Fontcolorb": 2}[name]
-            self._color[idx] = int(max(0.0, min(1.0, float(val))) * 255)
-            s.color = tuple(self._color)
-        elif name in ("Strokecolorr", "Strokecolorg", "Strokecolorb"):
-            idx = {"Strokecolorr": 0, "Strokecolorg": 1, "Strokecolorb": 2}[name]
-            self._stroke[idx] = int(max(0.0, min(1.0, float(val))) * 255)
-            s.stroke_color = tuple(self._stroke)
+            s.stroke_width = max(0, int(float(val)))
         elif name == "Fontweight":
             s.font_weight = val or "Bold"
+        elif name == "Opacity":
+            # 0.0〜1.0 で受ける(UIは%表示)
+            s.opacity = int(max(0.0, min(1.0, float(val))) * 255)
+        elif name in ("Fontcolorr", "Fontcolorg", "Fontcolorb"):
+            idx = {"Fontcolorr": 0, "Fontcolorg": 1, "Fontcolorb": 2}[name]
+            cur = self._color.setdefault(layer, list(s.color))
+            cur[idx] = int(max(0.0, min(1.0, float(val))) * 255)
+            s.color = tuple(cur)
+        elif name in ("Strokecolorr", "Strokecolorg", "Strokecolorb"):
+            idx = {"Strokecolorr": 0, "Strokecolorg": 1, "Strokecolorb": 2}[name]
+            cur = self._stroke.setdefault(layer, list(s.stroke_color))
+            cur[idx] = int(max(0.0, min(1.0, float(val))) * 255)
+            s.stroke_color = tuple(cur)
+
+    def _apply(self, name, val):
+        c = self.cfg
+        # ---- 住所判定・復調まわり(レイヤとは無関係) ----
+        if name == "Geomode":
+            c.geo_mode = val          # 反映には再起動が必要(geocoderはmode固定)
+            return
+        if name == "Addrlevel":
+            c.addr_level = val
+            return
+        if name == "Textformat":
+            c.text_format = val or "{address}上空"
+            return
+        if name == "Staletext":
+            c.stale_text = val
+            return
+        if name == "Audiochan":
+            c.channel = int(val)
+            return
+        # ---- レイヤのON/OFF・固有設定 ----
+        if self.layers is not None:
+            ls = self.layers
+            if name in ("Superon", "Clockon", "Stationon"):
+                setattr(ls, {"Superon": "addr_on", "Clockon": "clock_on",
+                             "Stationon": "station_on"}[name],
+                        bool(int(float(val))))
+                return
+            if name == "Clockformat":
+                ls.clock_format = val if val in ("hm", "hms") else "hms"
+                return
+            if name == "Stationtext":
+                ls.station_text = val or ""
+                return
         # ---- 地図スーパー(選択制) ----
-        elif name.startswith("Map") and self.mstyle is not None:
+        if name.startswith("Map") and self.mstyle is not None:
             m = self.mstyle
             if name == "Mapon":
                 m.on = bool(int(float(val)))
@@ -112,6 +164,16 @@ class OscControl:
                 m.span = max(0.02, min(3.0, float(val)))
             elif name == "Maptrail":
                 m.trail = bool(int(float(val)))
+            return
+        # ---- レイヤ別の見た目(接頭辞つき) ----
+        for prefix, layer in self._LAYER_PREFIX:
+            if name.startswith(prefix):
+                # 接頭辞を外した残り("fontsize" 等)を旧名の綴り("Fontsize")へ揃える
+                self._apply_layer(layer, name[len(prefix):].capitalize(), val)
+                return
+        # ---- 接頭辞なしの旧名 = 住所レイヤ(後方互換) ----
+        self._apply_layer("addr", name, val)
+
 
     def _loop(self):
         while not self._stop:
@@ -210,6 +272,14 @@ def make_engine(args):
                      stale_timeout=getattr(args, "stale_timeout", 5.0),
                      hold_timeout=getattr(args, "hold_timeout", 15.0))
     style = SuperStyle(font_size=args.font_size)
+    # 住所・時刻・局名の3レイヤ。住所レイヤは style と同一オブジェクトにして、
+    # 接頭辞なしの旧OSC名(Fontsize 等)がそのまま住所に効くようにする。
+    layers = LayerSet(addr=style)
+    layers.clock_on = getattr(args, "clock", "off") != "off"
+    if layers.clock_on:
+        layers.clock_format = args.clock
+    layers.station_text = getattr(args, "station_text", "") or ""
+    layers.station_on = bool(layers.station_text)
     decoder = HeliDecoder(cfg)
     renderer = SuperRenderer(args.width, args.height, style)
     status = StatusSender(args.status_host, args.status_port)
@@ -217,8 +287,8 @@ def make_engine(args):
     mstyle = MapStyle(on=bool(getattr(args, "map_on", False)))
     # 住所判定が読み込んだ境界データを再利用(二重読み込み・初回停止を回避)
     maprend = MapRenderer(decoder.boundary_lookup())
-    cache = {"text": None, "telop": blank, "frame": blank,
-             "style_ver": 0, "drawn_ver": -1,
+    cache = {"sig": None, "telop": blank, "frame": blank,
+             "text": None, "style_ver": 0,
              "map_img": None, "map_key": None, "trail": []}
 
     def _prewarm_map():
@@ -236,7 +306,7 @@ def make_engine(args):
         cache["style_ver"] += 1
 
     ctrl = (OscControl(cfg, style, args.ctrl_port, on_change=mark_dirty,
-                       mstyle=mstyle)
+                       mstyle=mstyle, layers=layers)
             if args.osc_control else None)
 
     def _update_map(ver) -> bool:
@@ -273,12 +343,16 @@ def make_engine(args):
         text = decoder.current_text()
         ver = cache["style_ver"]
         dirty = False
-        # 文字が変わった時 or 見た目設定が変わった時にテロップを再描画。
-        # 後者が無いと「決定」を押しても位置が変わるまで反映されなかった。
-        if text != cache["text"] or ver != cache["drawn_ver"]:
+        # 「どのレイヤに何が出ているか」+ 見た目バージョン を合図に再描画する。
+        # 見た目バージョンが無いと「決定」を押しても文字が変わるまで反映されない。
+        # 時刻は毎秒(分表示なら毎分)ここで文字列が変わる。
+        lays = build_layers(layers, text)
+        sig = (ver,) + tuple((l.key, l.text) for l in lays)
+        if sig != cache["sig"]:
+            cache["sig"] = sig
             cache["text"] = text
-            cache["drawn_ver"] = ver
-            cache["telop"] = renderer.render(text)
+            # レイヤ単位でキャッシュしているので、変わったレイヤだけ描き直される
+            cache["telop"] = renderer.render_layers(lays)
             dirty = True
         if _update_map(ver):
             dirty = True
@@ -291,9 +365,10 @@ def make_engine(args):
         status.send(decoder, text)
         return cache["frame"]
 
-    return dict(cfg=cfg, style=style, mstyle=mstyle, decoder=decoder,
-                renderer=renderer, maprend=maprend, status=status, ctrl=ctrl,
-                cache=cache, current_frame=current_frame)
+    return dict(cfg=cfg, style=style, layers=layers, mstyle=mstyle,
+                decoder=decoder, renderer=renderer, maprend=maprend,
+                status=status, ctrl=ctrl, cache=cache,
+                current_frame=current_frame)
 
 
 def run(args):
@@ -415,6 +490,11 @@ def build_parser():
     ap.add_argument("--datum", default="wgs84", choices=["wgs84", "tokyo"],
                     help="NNN座標の測地系。wgs84=変換なし(既定) / tokyo=WGS84へ変換")
     ap.add_argument("--font-size", type=int, default=90)
+    ap.add_argument("--clock", default="off", choices=["off", "hm", "hms"],
+                    help="時刻スーパー: off=出さない(既定) / hm=分まで / hms=秒まで。"
+                         "時刻は送出PCの時計。放送に出すならNTP同期必須")
+    ap.add_argument("--station-text", default="",
+                    help="局名スーパーの文字列(空=出さない)")
     ap.add_argument("--stale-timeout", type=float, default=5.0,
                     help="この秒数を超えたら『受信中』でないと判定")
     ap.add_argument("--hold-timeout", type=float, default=15.0,
