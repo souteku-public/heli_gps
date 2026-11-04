@@ -30,8 +30,8 @@ from nnn_decoder.osc import OscSender, osc_parse
 from .decoder_core import HeliConfig, HeliDecoder
 from .map_render import MapRenderer, MapStyle
 from .map_render import compose as map_compose
-from .renderer import (LayerSet, SuperRenderer, SuperStyle, build_layers,
-                       clock_text)
+from .renderer import (CLOCK_DATES, LAYER_KEYS, LayerSet, SuperRenderer,
+                       SuperStyle, build_layers, clock_text, stack_vertically)
 
 
 class OscControl:
@@ -124,8 +124,26 @@ class OscControl:
         if name == "Addrlevel":
             c.addr_level = val
             return
+        if name == "Addrdroppref":           # 「千葉県」→「千葉」
+            c.drop_pref_suffix = bool(int(float(val)))
+            return
+        if name == "Addrdropmuni":           # 「鴨川市」→「鴨川」
+            c.drop_muni_suffix = bool(int(float(val)))
+            return
+        if name == "Addrsep":                # 都道府県と市区町村の区切り
+            c.addr_sep = val or ""
+            return
+        if name == "Addroffshore":           # 海上のときの語("沖"/"沿岸"/空)
+            c.offshore_suffix = val or ""
+            return
+        if name == "Addrsuffix":             # 末尾の語("上空"など)
+            c.addr_suffix = val or ""
+            return
+        if name == "Addrsuffixon":           # 末尾の語を付けるか
+            c.addr_suffix_on = bool(int(float(val)))
+            return
         if name == "Textformat":
-            c.text_format = val or "{address}上空"
+            c.text_format = val or "{address}{suffix}"
             return
         if name == "Staletext":
             c.stale_text = val
@@ -142,7 +160,10 @@ class OscControl:
                         bool(int(float(val))))
                 return
             if name == "Clockformat":
-                ls.clock_format = val if val in ("hm", "hms") else "hms"
+                ls.clock_format = val if val in ("hm", "hms") else "hm"
+                return
+            if name == "Clockdate":
+                ls.clock_date = val if val in CLOCK_DATES else "off"
                 return
             if name == "Stationtext":
                 ls.station_text = val or ""
@@ -266,11 +287,15 @@ def make_engine(args):
 
     本番送出(app)とプレビュー(preview)で共有する。
     """
+    short = getattr(args, "addr_style", "full") == "short"
     cfg = HeliConfig(fs=args.rate, baud=args.baud, channel=args.channel,
                      geo_mode=args.geo_mode, addr_level=args.addr_level,
                      datum=getattr(args, "datum", "wgs84"),
                      stale_timeout=getattr(args, "stale_timeout", 5.0),
-                     hold_timeout=getattr(args, "hold_timeout", 15.0))
+                     hold_timeout=getattr(args, "hold_timeout", 15.0),
+                     drop_pref_suffix=short, drop_muni_suffix=short,
+                     addr_sep="・" if short else "",
+                     addr_suffix_on=not getattr(args, "no_addr_suffix", False))
     style = SuperStyle(font_size=args.font_size)
     # 住所・時刻・局名の3レイヤ。住所レイヤは style と同一オブジェクトにして、
     # 接頭辞なしの旧OSC名(Fontsize 等)がそのまま住所に効くようにする。
@@ -278,6 +303,7 @@ def make_engine(args):
     layers.clock_on = getattr(args, "clock", "off") != "off"
     if layers.clock_on:
         layers.clock_format = args.clock
+    layers.clock_date = getattr(args, "clock_date", "off")
     layers.station_text = getattr(args, "station_text", "") or ""
     layers.station_on = bool(layers.station_text)
     decoder = HeliDecoder(cfg)
@@ -489,10 +515,19 @@ def build_parser():
                     help="地図スーパーを最初からONにする(既定OFF。UIで切替可)")
     ap.add_argument("--datum", default="wgs84", choices=["wgs84", "tokyo"],
                     help="NNN座標の測地系。wgs84=変換なし(既定) / tokyo=WGS84へ変換")
-    ap.add_argument("--font-size", type=int, default=90)
+    ap.add_argument("--font-size", type=int, default=72)
     ap.add_argument("--clock", default="off", choices=["off", "hm", "hms"],
                     help="時刻スーパー: off=出さない(既定) / hm=分まで / hms=秒まで。"
                          "時刻は送出PCの時計。放送に出すならNTP同期必須")
+    ap.add_argument("--clock-date", default="off",
+                    choices=["off", "slash", "kanji"],
+                    help="時刻に日付を付ける: off(既定) / slash=11/4 / kanji=11月4日")
+    ap.add_argument("--addr-style", default="full",
+                    choices=["full", "short"],
+                    help="full=「千葉県鴨川市上空」(既定) / "
+                         "short=「千葉・鴨川上空」(都道府県・市区町村の接尾辞を省く)")
+    ap.add_argument("--no-addr-suffix", action="store_true",
+                    help="末尾の「上空」を付けない")
     ap.add_argument("--station-text", default="",
                     help="局名スーパーの文字列(空=出さない)")
     ap.add_argument("--stale-timeout", type=float, default=5.0,

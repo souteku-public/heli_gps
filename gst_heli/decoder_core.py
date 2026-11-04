@@ -24,8 +24,17 @@ class HeliConfig:
     channel: int = 2            # EMB音声のGPSチャンネル(0始まり)
     datum: str = "wgs84"        # 生座標の測地系(wgs84=変換なし / tokyo=変換)
     geo_mode: str = "offline"   # offline/auto/online
-    addr_level: str = "muni"    # pref/muni/city/town
-    text_format: str = "{address}上空"
+    addr_level: str = "muni"    # pref/muni/city/citygun/town
+    # 住所の見せ方。既定は従来どおり「千葉県鴨川市上空」。
+    #   drop_pref_suffix/drop_muni_suffix/addr_sep を組み合わせると
+    #   「千葉・鴨川上空」のような表記にできる。
+    drop_pref_suffix: bool = False   # 「千葉県」→「千葉」
+    drop_muni_suffix: bool = False   # 「鴨川市」→「鴨川」
+    addr_sep: str = ""               # 都道府県と市区町村の区切り("・"など)
+    offshore_suffix: str = "沖"      # 海上のときに付ける語("沖"/"沿岸"/空=なし)
+    addr_suffix: str = "上空"        # 末尾に付ける語
+    addr_suffix_on: bool = True      # 末尾の語を付けるか
+    text_format: str = "{address}{suffix}"
     stale_text: str = ""        # 受信途絶時の表示(空=消す)
     stale_timeout: float = 5.0  # これを超えたら「受信中」ではないと判定
     # 受信が途切れても直近スーパーを保持する秒数(音声の瞬断でテロップが
@@ -70,19 +79,34 @@ class HeliDecoder:
             return True
         return (time.monotonic() - self._last_time) > self.cfg.stale_timeout
 
-    def _format(self, pkt) -> str:
+    def address_text(self) -> str:
+        """住所部分だけの文字列(末尾の「上空」等は付けない)."""
         addr = self._geo.current
-        addr_s = addr.text(self.cfg.addr_level) if addr else ""
+        if not addr:
+            return ""
+        c = self.cfg
+        return addr.text(c.addr_level, c.offshore_suffix,
+                         drop_pref_suffix=c.drop_pref_suffix,
+                         drop_muni_suffix=c.drop_muni_suffix,
+                         sep=c.addr_sep)
+
+    def _format(self, pkt) -> str:
+        addr_s = self.address_text()
+        if not addr_s:
+            return ""
+        c = self.cfg
+        suffix = c.addr_suffix if c.addr_suffix_on else ""
         try:
-            return self.cfg.text_format.format(
+            return c.text_format.format(
                 address=addr_s,
+                suffix=suffix,
                 alt=f"{pkt.alt_m:.0f}",
                 lat=f"{pkt.lat_wgs84:.5f}",
                 lon=f"{pkt.lon_wgs84:.5f}",
                 sats=pkt.satellites if pkt.satellites is not None else "-",
             )
         except Exception:
-            return addr_s
+            return addr_s + suffix
 
     def current_text(self) -> str:
         """今表示すべきスーパー文字列.
@@ -109,7 +133,6 @@ class HeliDecoder:
         with self._lock:
             pkt = self._last_pkt
             age = (time.monotonic() - self._last_time) if pkt else 1e9
-        addr = self._geo.current
         return {
             "receiving": pkt is not None and age < self.cfg.stale_timeout,
             "lat": pkt.lat_wgs84 if pkt else None,
@@ -120,7 +143,7 @@ class HeliDecoder:
             "alt": pkt.alt_m if pkt else None,
             "fix": pkt.fix_status if pkt else None,
             "sats": pkt.satellites if pkt else None,
-            "address": addr.text(self.cfg.addr_level) if addr else None,
+            "address": self.address_text() or None,
             "packets_ok": self.packets_ok,
         }
 

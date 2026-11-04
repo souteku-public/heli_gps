@@ -50,6 +50,11 @@ LAYER_LABELS = {"addr": "住所", "clock": "時刻", "station": "局名"}
 
 # 時刻の表示書式。UI/OSC では "hm"(分まで) / "hms"(秒まで) で指定する。
 CLOCK_FORMATS = {"hm": "%H:%M", "hms": "%H:%M:%S"}
+# 日付の付け方。"off"=付けない / "slash"=11/4 / "kanji"=11月4日
+CLOCK_DATES = ("off", "slash", "kanji")
+
+# レイヤを縦に並べるときの既定値(1行の送り = 文字サイズ × この係数)
+LINE_PITCH = 1.3
 
 
 def bundled_fonts() -> list[str]:
@@ -66,11 +71,18 @@ def font_candidates() -> list[str]:
     return bundled_fonts() + _OFL_CANDIDATES + _SYSTEM_CANDIDATES
 
 
+# 既定のスーパー位置(左下に縦並び)。1080の下端セーフエリア内に3行収まる値。
+DEFAULT_SIZE = 72
+DEFAULT_X = 80
+DEFAULT_PITCH = int(DEFAULT_SIZE * LINE_PITCH)      # 93
+DEFAULT_TOP = 1080 - 95 - DEFAULT_SIZE - DEFAULT_PITCH * 2      # 727
+
+
 @dataclass
 class SuperStyle:
-    """1レイヤぶんの見た目設定."""
+    """1レイヤぶんの見た目設定(既定値は住所レイヤの既定と同じ)."""
     font_path: Optional[str] = None      # 明示指定(なければ候補から自動)
-    font_size: int = 90
+    font_size: int = DEFAULT_SIZE
     # 可変フォントのウェイト名(Thin/Light/Regular/Medium/SemiBold/Bold/Black 等)。
     # 同梱の Noto Sans JP VF は可変なのでここで太さを決める。非可変なら無視。
     font_weight: str = "Bold"
@@ -81,8 +93,8 @@ class SuperStyle:
     #   center… 基準点=文字の中央
     align_x: str = "left"
     align_y: str = "top"                 # top/center/bottom(margin_y基準)
-    margin_x: int = 80                   # 水平の基準位置(px)
-    margin_y: int = 60
+    margin_x: int = DEFAULT_X            # 水平の基準位置(px)
+    margin_y: int = DEFAULT_TOP
     # フチ取り(視認性向上。放送テロップの定番)
     stroke_width: int = 4
     stroke_color: tuple[int, int, int] = (0, 0, 0)
@@ -99,21 +111,20 @@ class SuperStyle:
 class LayerSet:
     """住所・時刻・局名の3レイヤぶんの設定.
 
-    既定位置は重ならないように置いてある(住所=左下、局名=左上、時刻=右上)。
+    既定は**3項目とも同じ位置・同じ文字サイズ・同じ色で縦並び**(左下)。
+    そこから項目ごとに位置・サイズ・色を変えられる。
     """
-    addr: SuperStyle = field(
-        default_factory=lambda: SuperStyle(margin_x=80, margin_y=900))
+    addr: SuperStyle = field(default_factory=SuperStyle)
     clock: SuperStyle = field(
-        default_factory=lambda: SuperStyle(font_size=64, margin_x=1840,
-                                           margin_y=60, align_x="right"))
+        default_factory=lambda: SuperStyle(margin_y=DEFAULT_TOP + DEFAULT_PITCH))
     station: SuperStyle = field(
-        default_factory=lambda: SuperStyle(font_size=48, margin_x=80,
-                                           margin_y=60, align_x="left"))
+        default_factory=lambda: SuperStyle(margin_y=DEFAULT_TOP + DEFAULT_PITCH * 2))
     addr_on: bool = True
     # 時刻・局名は**既定OFF**。明示的にONにしたときだけ放送に出る。
     clock_on: bool = False
     station_on: bool = False
-    clock_format: str = "hms"            # "hm"(分まで) / "hms"(秒まで)
+    clock_format: str = "hm"             # "hm"(分まで) / "hms"(秒まで)
+    clock_date: str = "off"              # "off" / "slash"(11/4) / "kanji"(11月4日)
     station_text: str = ""
 
     def style(self, key: str) -> SuperStyle:
@@ -131,8 +142,11 @@ class Layer:
     style: SuperStyle
 
 
-def clock_text(fmt: str = "hms", now=None) -> str:
-    """現在時刻の表示文字列。fmt は "hm"(分まで) / "hms"(秒まで).
+def clock_text(fmt: str = "hm", date: str = "off", now=None) -> str:
+    """現在時刻の表示文字列.
+
+    fmt  … "hm"(分まで) / "hms"(秒まで)
+    date … "off"(日付なし) / "slash"(11/4) / "kanji"(11月4日)
 
     時刻は送出PCのローカル時計から取る。NNNフォーマットのパケットには
     時刻フィールドが無いため(DATA 20byte = 測位状態4+緯度6+経度7+高度3)。
@@ -140,7 +154,12 @@ def clock_text(fmt: str = "hms", now=None) -> str:
     """
     import time as _time
     t = now if now is not None else _time.localtime()
-    return _time.strftime(CLOCK_FORMATS.get(fmt, CLOCK_FORMATS["hms"]), t)
+    hm = _time.strftime(CLOCK_FORMATS.get(fmt, CLOCK_FORMATS["hm"]), t)
+    if date == "slash":
+        return f"{t.tm_mon}/{t.tm_mday} {hm}"
+    if date == "kanji":
+        return f"{t.tm_mon}月{t.tm_mday}日 {hm}"
+    return hm
 
 
 def build_layers(ls: LayerSet, addr_text: str) -> list["Layer"]:
@@ -149,10 +168,35 @@ def build_layers(ls: LayerSet, addr_text: str) -> list["Layer"]:
     if ls.addr_on and addr_text:
         out.append(Layer("addr", addr_text, ls.addr))
     if ls.clock_on:
-        out.append(Layer("clock", clock_text(ls.clock_format), ls.clock))
+        out.append(Layer("clock", clock_text(ls.clock_format, ls.clock_date),
+                         ls.clock))
     if ls.station_on and ls.station_text:
         out.append(Layer("station", ls.station_text, ls.station))
     return out
+
+
+def stack_vertically(styles, keys, *, x: int = None, top: int = None,
+                     align: str = None, pitch: float = LINE_PITCH) -> None:
+    """指定したレイヤを同じ基準位置で縦に並べ直す(その場で書き換え).
+
+    styles … {レイヤ名: SuperStyle}
+    keys   … 並べる順(上から)
+    x/top/align … 未指定なら先頭レイヤの現在値を使う
+    文字サイズが違っても重ならないよう、各行の送りはそのレイヤの
+    文字サイズに比例させる。
+    """
+    keys = [k for k in keys if k in styles]
+    if not keys:
+        return
+    head = styles[keys[0]]
+    x = head.margin_x if x is None else x
+    y = head.margin_y if top is None else top
+    align = head.align_x if align is None else align
+    for k in keys:
+        st = styles[k]
+        st.margin_x, st.margin_y = int(x), int(y)
+        st.align_x, st.align_y = align, "top"
+        y += st.font_size * pitch
 
 
 def _raster_sig(text: str, st: SuperStyle):

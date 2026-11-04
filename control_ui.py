@@ -72,8 +72,14 @@ try:
 except Exception:
     HAVE_WYSIWYG = False
 
-    def clock_text(fmt="hms", now=None):            # フォールバック
-        return time.strftime("%H:%M:%S" if fmt == "hms" else "%H:%M")
+    def clock_text(fmt="hm", date="off", now=None):     # フォールバック
+        t = now or time.localtime()
+        hm = time.strftime("%H:%M:%S" if fmt == "hms" else "%H:%M", t)
+        if date == "slash":
+            return f"{t.tm_mon}/{t.tm_mday} {hm}"
+        if date == "kanji":
+            return f"{t.tm_mon}月{t.tm_mday}日 {hm}"
+        return hm
 
 try:
     import ui_theme
@@ -106,24 +112,39 @@ LAYERS = [("addr", "住所", ""), ("clock", "時刻", "Clock"),
 LAYER_LABEL = {k: lab for k, lab, _p in LAYERS}
 LAYER_PREFIX = {k: p for k, _lab, p in LAYERS}
 CLOCK_FMT = [("分まで (12:34)", "hm"), ("秒まで (12:34:56)", "hms")]
+CLOCK_DATE = [("日付なし", "off"), ("11/4", "slash"), ("11月4日", "kanji")]
+ADDR_SEP = [("区切りなし", ""), ("・（中黒）", "・"), ("　（スペース）", " ")]
+ADDR_OFFSHORE = [("沖", "沖"), ("沿岸", "沿岸"), ("付けない", "")]
+LINE_PITCH = 1.3          # 縦並びの行送り(文字サイズ × この係数)
 
 STALE_SEC = 3.0
 FRAME_W, FRAME_H = 1920, 1080
 CANVAS_W, CANVAS_H = 512, 288
 SCALE = FRAME_W / CANVAS_W          # 3.75
 
-# レイヤごとの既定値(重ならない位置に置く: 住所=左下 / 局名=左上 / 時刻=右上)
+# レイヤの既定値。**3項目とも同じ位置・同じ文字サイズ・同じ色で縦並び**(左下)。
+# そこから項目ごとに位置・サイズ・色を変えられる。
+# gst_heli/renderer.py の DEFAULT_* と同じ値(あちらは送出側の既定)。
+DEF_SIZE, DEF_X, DEF_TOP, DEF_PITCH = 72, 80, 727, 93
+
+
+def _layer_default(i: int, **extra) -> dict:
+    d = dict(on=(i == 0), size=DEF_SIZE, weight="Bold", align="left", sw=5,
+             fill=[1.0, 1.0, 1.0], stroke=[0.0, 0.0, 0.0], opacity=100,
+             pos=[DEF_X, DEF_TOP + DEF_PITCH * i])
+    d.update(extra)
+    return d
+
+
 LAYER_DEFAULTS = {
-    "addr": dict(on=True, size=90, weight="Bold", align="left", sw=5,
-                 fill=[1.0, 1.0, 1.0], stroke=[0.0, 0.0, 0.0],
-                 opacity=100, pos=[480, 900]),
-    "clock": dict(on=False, size=64, weight="Bold", align="right", sw=4,
-                  fill=[1.0, 1.0, 1.0], stroke=[0.0, 0.0, 0.0],
-                  opacity=100, pos=[1840, 60], format="hms"),
-    "station": dict(on=False, size=48, weight="Bold", align="left", sw=4,
-                    fill=[1.0, 1.0, 1.0], stroke=[0.0, 0.0, 0.0],
-                    opacity=100, pos=[80, 60], text=""),
+    "addr": _layer_default(0),
+    "clock": _layer_default(1, format="hm", date="off"),
+    "station": _layer_default(2, text=""),
 }
+
+# 住所の見せ方(「千葉県鴨川市上空」/「千葉・鴨川上空」など)
+ADDR_DEFAULTS = dict(level="muni", droppref=False, dropmuni=False, sep="",
+                     offshore="沖", suffix="上空", suffixon=True)
 
 
 def _hex(rgb01):
@@ -132,6 +153,14 @@ def _hex(rgb01):
 
 def _default_layers() -> dict:
     return {k: dict(v) for k, v in LAYER_DEFAULTS.items()}
+
+
+def _addr_from_saved(saved: dict) -> dict:
+    d = dict(ADDR_DEFAULTS)
+    got = saved.get("addr")
+    if isinstance(got, dict):
+        d.update({k: v for k, v in got.items() if k in d})
+    return d
 
 
 def _layers_from_saved(saved: dict) -> dict:
@@ -198,9 +227,10 @@ class ControlUI:
         saved = _load_settings()
         # レイヤ設定(住所/時刻/局名)。self.cur が編集中のレイヤ。
         self.L = _layers_from_saved(saved)
+        self.A = _addr_from_saved(saved)      # 住所の見せ方
         self.cur = "addr"
         self.show_other_fonts = bool(saved.get("font_show_other", False))
-        self.super_text = "(プレビュー)"
+        self.super_text = ""      # 送出側から届いた実際のスーパー
         # 地図スーパー(選択制)。既定OFF。ONにすると放送に出る
         self.map_on = bool(saved.get("map_on", False))
         self.map_pos = list(saved.get("map_pos", [1440, 690]))
@@ -240,7 +270,8 @@ class ControlUI:
         self._tick_clock()
 
     # ---------- ウィジェット生成補助 ----------
-    def _menu(self, parent, label, items, ctrl_name, default_idx=0, kind="str"):
+    def _menu(self, parent, label, items, ctrl_name, default_idx=0, kind="str",
+              on_extra=None):
         fr = ttk.Frame(parent); fr.pack(fill="x", pady=3)
         ttk.Label(fr, text=label, width=16).pack(side="left")
         var = tk.StringVar(value=items[default_idx][0])
@@ -248,9 +279,13 @@ class ControlUI:
                           state="readonly", width=26)
         cb.pack(side="left", fill="x", expand=True)
         lut = {lab: val for lab, val in items}
-        cb.bind("<<ComboboxSelected>>",
-                lambda _e: self.osc.send(f"/heli/ctrl/{ctrl_name}",
-                                         int(lut[var.get()]) if kind == "int" else lut[var.get()]))
+
+        def emit(_e=None):
+            v = lut[var.get()]
+            self.osc.send(f"/heli/ctrl/{ctrl_name}", int(v) if kind == "int" else v)
+            if on_extra:
+                on_extra(v)
+        cb.bind("<<ComboboxSelected>>", emit)
         return var
 
     def _slider(self, parent, label, lo, hi, default, on_change):
@@ -324,7 +359,10 @@ class ControlUI:
     def _build_addr(self, parent):
         s = self._section(parent, "住所")
         self._menu(s, "住所変換モード", GEOMODE, "Geomode", 0)
-        self._menu(s, "住所の粒度", ADDRLEVEL, "Addrlevel", 1)
+        idx = next((i for i, (_l, v) in enumerate(ADDRLEVEL)
+                    if v == self.A["level"]), 1)
+        self.level_var = self._menu(s, "住所の粒度", ADDRLEVEL, "Addrlevel", idx,
+                                    on_extra=self._on_addr_level)
         self._menu(s, "ビットレート", BAUD, "Baud", 0)
         fr = ttk.Frame(s); fr.pack(fill="x", pady=3)
         ttk.Label(fr, text="GPS音声ch(1-8)", width=16).pack(side="left")
@@ -333,7 +371,7 @@ class ControlUI:
         ttk.Spinbox(fr, from_=1, to=16, textvariable=self.audiochan, width=6,
                     command=lambda: self.osc.send("/heli/ctrl/Audiochan",
                                                   int(self.audiochan.get()) - 1)).pack(side="left")
-        for label, ctrl, dflt in (("表示書式", "Textformat", "{address}上空"),
+        for label, ctrl, dflt in (("表示書式", "Textformat", "{address}{suffix}"),
                                   ("受信途絶時の表示", "Staletext", "")):
             fr = ttk.Frame(s); fr.pack(fill="x", pady=3)
             ttk.Label(fr, text=label, width=16).pack(side="left")
@@ -342,6 +380,106 @@ class ControlUI:
             act = lambda _e=None, v=var, cn=ctrl: self.osc.send(f"/heli/ctrl/{cn}", v.get())
             e.bind("<Return>", act)
             ttk.Button(fr, text="適用", width=5, command=act).pack(side="left")
+        self._build_addr_style(s)
+
+    # ---------- 住所の見せ方 ----------
+    def _build_addr_style(self, parent):
+        s = ttk.LabelFrame(parent, text="住所の見せ方")
+        s.pack(fill="x", padx=6, pady=(6, 4))
+
+        fr = ttk.Frame(s); fr.pack(fill="x", pady=3)
+        self.droppref_var = tk.BooleanVar(value=bool(self.A["droppref"]))
+        ttk.Checkbutton(fr, text="「県・都・府」を省く", variable=self.droppref_var,
+                        command=self._on_addr_style).pack(side="left", padx=(0, 14))
+        self.dropmuni_var = tk.BooleanVar(value=bool(self.A["dropmuni"]))
+        ttk.Checkbutton(fr, text="「市・区・町・村」を省く", variable=self.dropmuni_var,
+                        command=self._on_addr_style).pack(side="left")
+
+        fr2 = ttk.Frame(s); fr2.pack(fill="x", pady=3)
+        ttk.Label(fr2, text="区切り", width=16).pack(side="left")
+        self._sep_lut = {lab: v for lab, v in ADDR_SEP}
+        rev = {v: k for k, v in self._sep_lut.items()}
+        self.sep_var = tk.StringVar(value=rev.get(self.A["sep"], ADDR_SEP[0][0]))
+        cb = ttk.Combobox(fr2, textvariable=self.sep_var,
+                          values=[lab for lab, _v in ADDR_SEP],
+                          state="readonly", width=16)
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>", lambda _e: self._on_addr_style())
+        ttk.Label(fr2, text="海上の表記").pack(side="left", padx=(14, 4))
+        self._off_lut = {lab: v for lab, v in ADDR_OFFSHORE}
+        rev2 = {v: k for k, v in self._off_lut.items()}
+        self.offshore_var = tk.StringVar(
+            value=rev2.get(self.A["offshore"], ADDR_OFFSHORE[0][0]))
+        cb2 = ttk.Combobox(fr2, textvariable=self.offshore_var,
+                           values=[lab for lab, _v in ADDR_OFFSHORE],
+                           state="readonly", width=8)
+        cb2.pack(side="left")
+        cb2.bind("<<ComboboxSelected>>", lambda _e: self._on_addr_style())
+
+        fr3 = ttk.Frame(s); fr3.pack(fill="x", pady=3)
+        self.suffixon_var = tk.BooleanVar(value=bool(self.A["suffixon"]))
+        ttk.Checkbutton(fr3, text="末尾に付ける", variable=self.suffixon_var,
+                        command=self._on_addr_style).pack(side="left")
+        self.suffix_var = tk.StringVar(value=self.A["suffix"])
+        e = ttk.Entry(fr3, textvariable=self.suffix_var, width=10)
+        e.pack(side="left", padx=6)
+        e.bind("<Return>", lambda _e: self._on_addr_style())
+        e.bind("<FocusOut>", lambda _e: self._on_addr_style())
+        ttk.Label(fr3, text="（「上空」など。チェックを外すと付きません）",
+                  style="Muted.TLabel").pack(side="left")
+
+        self.addr_sample_lbl = ttk.Label(s, text="", style="Muted.TLabel")
+        self.addr_sample_lbl.pack(anchor="w", padx=4, pady=(4, 4))
+        self._update_addr_sample()
+
+    def _on_addr_level(self, _v=None):
+        self.A["level"] = self._level_value()
+        self._update_addr_sample()
+        self._redraw_canvas()
+
+    def _level_value(self) -> str:
+        lut = {lab: v for lab, v in ADDRLEVEL}
+        return lut.get(self.level_var.get(), "muni")
+
+    def _on_addr_style(self):
+        a = self.A
+        a["droppref"] = bool(self.droppref_var.get())
+        a["dropmuni"] = bool(self.dropmuni_var.get())
+        a["sep"] = self._sep_lut.get(self.sep_var.get(), "")
+        a["offshore"] = self._off_lut.get(self.offshore_var.get(), "沖")
+        a["suffix"] = self.suffix_var.get()
+        a["suffixon"] = bool(self.suffixon_var.get())
+        self._stage("/heli/ctrl/Addrdroppref", 1 if a["droppref"] else 0)
+        self._stage("/heli/ctrl/Addrdropmuni", 1 if a["dropmuni"] else 0)
+        self._stage("/heli/ctrl/Addrsep", a["sep"])
+        self._stage("/heli/ctrl/Addroffshore", a["offshore"])
+        self._stage("/heli/ctrl/Addrsuffix", a["suffix"])
+        self._stage("/heli/ctrl/Addrsuffixon", 1 if a["suffixon"] else 0)
+        self._update_addr_sample()
+        self._redraw_canvas()
+
+    def _sample_text(self, pref="千葉県", city="鴨川市", offshore=False,
+                     gun="", town="") -> str:
+        """現在の設定で住所がどう出るかの見本(送出側と同じロジック)."""
+        a = self.A
+        suffix = a["suffix"] if a["suffixon"] else ""
+        try:
+            from nnn_decoder.geocode import Address
+            body = Address(pref=pref, city=city, gun=gun, town=town,
+                           offshore=offshore).text(
+                a["level"], a["offshore"],
+                drop_pref_suffix=a["droppref"],
+                drop_muni_suffix=a["dropmuni"], sep=a["sep"])
+        except Exception:
+            body = f"{pref}{a['sep']}{city}"
+        return body + suffix
+
+    def _update_addr_sample(self):
+        if not hasattr(self, "addr_sample_lbl"):
+            return
+        land = self._sample_text()
+        sea = self._sample_text("茨城県", "鹿嶋市", offshore=True)
+        self.addr_sample_lbl.config(text=f"例）陸上: {land}　／　海上: {sea}")
 
     # ---------- 表示項目(レイヤのON/OFFと固有設定) ----------
     def _build_items(self, parent):
@@ -355,18 +493,28 @@ class ControlUI:
                             command=lambda k=key: self._on_layer_toggle(k)).pack(
                 side="left", padx=(0, 16))
 
-        # 時刻の書式
+        # 時刻の書式(粒度と日付)
         fr2 = ttk.Frame(s); fr2.pack(fill="x", pady=3)
         ttk.Label(fr2, text="時刻の表示", width=16).pack(side="left")
         self._fmt_lut = {lab: val for lab, val in CLOCK_FMT}
         rev = {v: k for k, v in self._fmt_lut.items()}
         self.fmt_var = tk.StringVar(
-            value=rev.get(self.L["clock"].get("format", "hms"), CLOCK_FMT[1][0]))
+            value=rev.get(self.L["clock"].get("format", "hm"), CLOCK_FMT[0][0]))
         cb = ttk.Combobox(fr2, textvariable=self.fmt_var,
                           values=[lab for lab, _v in CLOCK_FMT],
-                          state="readonly", width=20)
+                          state="readonly", width=18)
         cb.pack(side="left")
         cb.bind("<<ComboboxSelected>>", lambda _e: self._on_clock_format())
+        ttk.Label(fr2, text="日付").pack(side="left", padx=(14, 4))
+        self._date_lut = {lab: val for lab, val in CLOCK_DATE}
+        rev2 = {v: k for k, v in self._date_lut.items()}
+        self.date_var = tk.StringVar(
+            value=rev2.get(self.L["clock"].get("date", "off"), CLOCK_DATE[0][0]))
+        cb2 = ttk.Combobox(fr2, textvariable=self.date_var,
+                           values=[lab for lab, _v in CLOCK_DATE],
+                           state="readonly", width=10)
+        cb2.pack(side="left")
+        cb2.bind("<<ComboboxSelected>>", lambda _e: self._on_clock_format())
 
         # 局名の文字列
         fr3 = ttk.Frame(s); fr3.pack(fill="x", pady=3)
@@ -393,9 +541,12 @@ class ControlUI:
         self._redraw_canvas()
 
     def _on_clock_format(self):
-        fmt = self._fmt_lut.get(self.fmt_var.get(), "hms")
+        fmt = self._fmt_lut.get(self.fmt_var.get(), "hm")
+        date = self._date_lut.get(self.date_var.get(), "off")
         self.L["clock"]["format"] = fmt
+        self.L["clock"]["date"] = date
         self._stage("/heli/ctrl/Clockformat", fmt)
+        self._stage("/heli/ctrl/Clockdate", date)
         self._redraw_canvas()
 
     def _on_station_text(self):
@@ -644,8 +795,18 @@ class ControlUI:
                 self.osc.send(a(f"Strokecolor{comp}"), float(d["stroke"][ch]))
             self.osc.send(a("Posx"), float(d["pos"][0]))
             self.osc.send(a("Posy"), float(d["pos"][1]))
-        self.osc.send("/heli/ctrl/Clockformat", self.L["clock"].get("format", "hms"))
+        self.osc.send("/heli/ctrl/Clockformat", self.L["clock"].get("format", "hm"))
+        self.osc.send("/heli/ctrl/Clockdate", self.L["clock"].get("date", "off"))
         self.osc.send("/heli/ctrl/Stationtext", self.L["station"].get("text", ""))
+        # 住所の見せ方
+        a = self.A
+        self.osc.send("/heli/ctrl/Addrlevel", a["level"])
+        self.osc.send("/heli/ctrl/Addrdroppref", 1 if a["droppref"] else 0)
+        self.osc.send("/heli/ctrl/Addrdropmuni", 1 if a["dropmuni"] else 0)
+        self.osc.send("/heli/ctrl/Addrsep", a["sep"])
+        self.osc.send("/heli/ctrl/Addroffshore", a["offshore"])
+        self.osc.send("/heli/ctrl/Addrsuffix", a["suffix"])
+        self.osc.send("/heli/ctrl/Addrsuffixon", 1 if a["suffixon"] else 0)
         # 地図スーパー(選択制)
         self.osc.send("/heli/ctrl/Mapon", 1 if self.map_on else 0)
         self.osc.send("/heli/ctrl/Maptrail", 1 if self.map_trail else 0)
@@ -659,6 +820,7 @@ class ControlUI:
     def _collect_settings(self) -> dict:
         return {
             "layers": {k: dict(v) for k, v in self.L.items()},
+            "addr": dict(self.A),
             "font_show_other": bool(self.show_other_fonts),
             "map_on": bool(self.map_on),
             "map_pos": list(self.map_pos),
@@ -678,15 +840,32 @@ class ControlUI:
     def _apply_settings(self, d: dict):
         """設定dictをUIに反映し、送出側へも即時送信(プリセット呼出用)."""
         self.L = _layers_from_saved(d)
+        self.A = _addr_from_saved(d)
         self.show_other_fonts = bool(d.get("font_show_other", self.show_other_fonts))
         self.show_other_var.set(self.show_other_fonts)
         self._reload_fonts(keep=False)
         for key, _l, _p in LAYERS:
             self.on_vars[key].set(bool(self.L[key]["on"]))
         rev = {v: k for k, v in self._fmt_lut.items()}
-        self.fmt_var.set(rev.get(self.L["clock"].get("format", "hms"),
-                                 CLOCK_FMT[1][0]))
+        self.fmt_var.set(rev.get(self.L["clock"].get("format", "hm"),
+                                 CLOCK_FMT[0][0]))
+        rev2 = {v: k for k, v in self._date_lut.items()}
+        self.date_var.set(rev2.get(self.L["clock"].get("date", "off"),
+                                   CLOCK_DATE[0][0]))
         self.station_var.set(self.L["station"].get("text", ""))
+        # 住所の見せ方
+        a = self.A
+        lv = {v: k for k, v in {lab: v for lab, v in ADDRLEVEL}.items()}
+        self.level_var.set(lv.get(a["level"], ADDRLEVEL[1][0]))
+        self.droppref_var.set(bool(a["droppref"]))
+        self.dropmuni_var.set(bool(a["dropmuni"]))
+        self.sep_var.set({v: k for k, v in self._sep_lut.items()}.get(
+            a["sep"], ADDR_SEP[0][0]))
+        self.offshore_var.set({v: k for k, v in self._off_lut.items()}.get(
+            a["offshore"], ADDR_OFFSHORE[0][0]))
+        self.suffix_var.set(a["suffix"])
+        self.suffixon_var.set(bool(a["suffixon"]))
+        self._update_addr_sample()
         # 地図スーパー
         self.map_on = bool(d.get("map_on", self.map_on))
         self.map_on_var.set(self.map_on)
@@ -774,6 +953,11 @@ class ControlUI:
         self.canvas.pack(pady=6)
         self.pos_lbl = ttk.Label(s, text="", style="Muted.TLabel")
         self.pos_lbl.pack(anchor="w", padx=2)
+        fr = ttk.Frame(s); fr.pack(fill="x", pady=(4, 6))
+        ttk.Button(fr, text="表示中の項目を縦に並べ直す",
+                   command=self._restack).pack(side="left")
+        ttk.Label(fr, text="（編集中の項目の位置・揃えを基準に、上から順に重ならず並べます）",
+                  style="Muted.TLabel").pack(side="left", padx=6)
 
         if self._pv_renderer:
             # WYSIWYG: 1枚の画像アイテムに本番同等の描画を貼る
@@ -822,8 +1006,11 @@ class ControlUI:
 
     def _build_map(self, parent):
         s = self._section(parent, "地図スーパー(選択制・既定OFF)")
-        ttk.Label(s, text="ONにすると放送に地図が出ます。出典表記は自動で焼き込まれます。",
-                  style="Muted.TLabel").pack(anchor="w", pady=(2, 6))
+        ttk.Label(s, text="★ Fill/Key・バーンインで ON にすると地図が放送に出ます。"
+                          "現状の運用では OFF のままにしてください。"
+                          "位置の確認は下の「地図」ボタン（PC画面のみ）でできます。",
+                  style="Muted.TLabel", wraplength=560,
+                  justify="left").pack(anchor="w", pady=(2, 6))
 
         fr = ttk.Frame(s); fr.pack(fill="x", pady=3)
         self.map_on_var = tk.BooleanVar(value=self.map_on)
@@ -980,9 +1167,12 @@ class ControlUI:
     # ---------- 配置(ドラッグ) ----------
     def _layer_text(self, key: str) -> str:
         if key == "addr":
-            return self.super_text or "(プレビュー)"
+            # まだ受信していないときは、現在の「住所の見せ方」の見本を出す。
+            # 設定を変えた結果がそのまま配置プレビューで確認できる。
+            return self.super_text or self._sample_text()
         if key == "clock":
-            return clock_text(self.L["clock"].get("format", "hms"))
+            return clock_text(self.L["clock"].get("format", "hm"),
+                              self.L["clock"].get("date", "off"))
         return self.L["station"].get("text", "") or "(局名)"
 
     def _visible_layers(self) -> list[str]:
@@ -1052,6 +1242,23 @@ class ControlUI:
         ay = max(0, min(CANVAS_H, cyp - h / 2))   # 縦は上端基準
         d["pos"] = [int(ax * SCALE), int(ay * SCALE)]
         self._redraw_canvas(); self._send_pos(self.cur)
+
+    def _restack(self):
+        """表示中の項目を縦に並べ直す(文字サイズが違っても重ならない)."""
+        keys = self._visible_layers()
+        if not keys:
+            return
+        head = self.L[self.cur] if self.cur in keys else self.L[keys[0]]
+        x, y, align = head["pos"][0], head["pos"][1], head["align"]
+        for k in keys:
+            d = self.L[k]
+            d["pos"] = [int(x), int(y)]
+            d["align"] = align
+            self._stage(self._addr_of("Alignx", k), align)
+            self._send_pos(k)
+            y += d["size"] * LINE_PITCH
+        self._load_layer_widgets()
+        self._redraw_canvas()
 
     def _nudge(self, dx, dy):
         d = self.L[self.cur]

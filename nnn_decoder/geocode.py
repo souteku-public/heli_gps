@@ -57,7 +57,33 @@ class Address:
             return self.city[: i + 1]
         return self.city
 
-    def text(self, level: str = "muni", offshore_suffix: str = "沖") -> str:
+    @staticmethod
+    def strip_pref_suffix(pref: str) -> str:
+        """都道府県名から「都・府・県」を外す ("千葉県"→"千葉").
+
+        北海道だけは「北海」になってしまうのでそのまま返す。
+        """
+        if pref == "北海道":
+            return pref
+        if len(pref) > 2 and pref[-1] in "都府県":
+            return pref[:-1]
+        return pref
+
+    @staticmethod
+    def strip_muni_suffix(name: str) -> str:
+        """市区町村名から末尾の「市・区・町・村」を外す ("鴨川市"→"鴨川").
+
+        末尾1文字だけを見る。"市川市"→"市川"、"四日市市"→"四日市" のように
+        名前の一部である同じ字は残る。2文字以下になる場合は外さない
+        ("東村"→"東" のような不自然な短縮を避ける)。
+        """
+        if len(name) > 2 and name[-1] in "市区町村":
+            return name[:-1]
+        return name
+
+    def text(self, level: str = "muni", offshore_suffix: str = "沖", *,
+             drop_pref_suffix: bool = False, drop_muni_suffix: bool = False,
+             sep: str = "") -> str:
         """表示用文字列.
 
         level:
@@ -67,16 +93,27 @@ class Address:
             'citygun' … 都道府県+郡+市区町村(区・郡あり)
             'town'    … 都道府県+市区町村+町丁目(要オンライン)
         海上のときは市町村名の後ろに offshore_suffix("沖")を付す。
+
+        drop_pref_suffix … 「千葉県」→「千葉」
+        drop_muni_suffix … 「鴨川市」→「鴨川」
+        sep              … 都道府県と市区町村の区切り("・"など)
+        例: drop_pref_suffix=True, drop_muni_suffix=True, sep="・"
+            → 「千葉・鴨川上空」のような表記になる
         """
         suf = offshore_suffix if self.offshore else ""
+        pref = self.strip_pref_suffix(self.pref) if drop_pref_suffix else self.pref
         if level == "pref":
-            return f"{self.pref}{suf}"
+            return f"{pref}{suf}"
         if level == "town" and self.town and not self.offshore:
-            return f"{self.pref}{self.city}{self.town}"
+            city = self.strip_muni_suffix(self.city) if drop_muni_suffix else self.city
+            return f"{pref}{sep}{city}{self.town}"
         if level == "citygun":
-            return f"{self.pref}{self.gun}{self.city}{suf}"
-        city = self._city_muni() if level == "muni" else self.city
-        return f"{self.pref}{city}{suf}"
+            rest = f"{self.gun}{self.city}"
+        else:
+            rest = self._city_muni() if level == "muni" else self.city
+        if drop_muni_suffix:
+            rest = self.strip_muni_suffix(rest)
+        return f"{pref}{sep}{rest}{suf}"
 
 
 def _load_muni_table() -> dict:

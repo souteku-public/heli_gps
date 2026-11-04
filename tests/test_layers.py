@@ -64,10 +64,18 @@ def test_build_layers_respects_on_flags():
 
 
 def test_clock_format():
-    t = time.struct_time((2026, 11, 2, 12, 34, 56, 0, 306, 0))
-    assert clock_text("hm", t) == "12:34"
-    assert clock_text("hms", t) == "12:34:56"
-    assert clock_text("bogus", t) == "12:34:56"      # 不正値は秒まで
+    t = time.struct_time((2026, 11, 4, 12, 34, 56, 0, 308, 0))
+    assert clock_text("hm", "off", t) == "12:34"
+    assert clock_text("hms", "off", t) == "12:34:56"
+    assert clock_text("bogus", "off", t) == "12:34"      # 不正値は分まで
+
+
+def test_clock_date():
+    t = time.struct_time((2026, 11, 4, 12, 34, 56, 0, 308, 0))
+    assert clock_text("hm", "slash", t) == "11/4 12:34"
+    assert clock_text("hm", "kanji", t) == "11月4日 12:34"
+    assert clock_text("hms", "slash", t) == "11/4 12:34:56"
+    assert clock_text("hm", "bogus", t) == "12:34"       # 不正値は日付なし
 
 
 # ---------------- 描画 ----------------
@@ -90,10 +98,10 @@ def test_layers_are_placed_independently():
 
 def test_opacity_scales_alpha():
     r = _renderer()
-    full = r.render_layers([Layer("addr", "あ", SuperStyle(font_size=60))])
+    base = dict(font_size=60, margin_x=20, margin_y=20)
+    full = r.render_layers([Layer("addr", "あ", SuperStyle(**base))])
     r2 = _renderer()
-    half = r2.render_layers([Layer("addr", "あ", SuperStyle(font_size=60,
-                                                            opacity=128))])
+    half = r2.render_layers([Layer("addr", "あ", SuperStyle(opacity=128, **base))])
     assert int(full[:, :, 3].max()) == 255
     assert int(half[:, :, 3].max()) == 128
 
@@ -101,9 +109,10 @@ def test_opacity_scales_alpha():
 def test_render_layers_returns_independent_arrays():
     """前フレームが後から書き換わらないこと(送出スレッドと競合するため)."""
     r = _renderer()
-    f1 = r.render_layers([Layer("addr", "あ", SuperStyle(font_size=60))])
+    st = SuperStyle(font_size=60, margin_x=20, margin_y=20)
+    f1 = r.render_layers([Layer("addr", "あ", st)])
     before = f1.copy()
-    r.render_layers([Layer("addr", "い", SuperStyle(font_size=60))])
+    r.render_layers([Layer("addr", "い", st)])
     assert np.array_equal(f1, before)
 
 
@@ -131,7 +140,7 @@ def test_moving_a_layer_does_not_rerasterize():
 
 
 def test_render_backward_compatible():
-    r = _renderer()
+    r = SuperRenderer(640, 360, SuperStyle(font_size=40, margin_x=20, margin_y=20))
     f = r.render("東京都港区上空")
     assert f.shape == (360, 640, 4)
     assert int(f[:, :, 3].max()) == 255
@@ -162,7 +171,7 @@ def test_legacy_osc_names_target_address_layer():
     assert ls.addr.align_x == "center"
     assert ls.addr.opacity == 127
     # 他のレイヤは無傷
-    assert ls.clock.font_size == 64 and ls.station.margin_x == 80
+    assert ls.clock.font_size == 72 and ls.clock.margin_x == 80
 
 
 def test_prefixed_osc_names_target_their_layer():
@@ -176,7 +185,7 @@ def test_prefixed_osc_names_target_their_layer():
     assert (ls.clock.font_size, ls.clock.margin_x, ls.clock.align_x) == (70, 1800, "right")
     assert ls.clock.opacity == 204
     assert ls.station.font_size == 52 and ls.station.font_weight == "Black"
-    assert ls.addr.font_size == 90      # 住所は変わっていない
+    assert ls.addr.font_size == 72      # 住所は変わっていない
 
 
 def test_layer_colors_do_not_leak_between_layers():
@@ -201,7 +210,11 @@ def test_layer_on_off_and_clock_format():
     assert ls.clock_format == "hm"
     assert ls.station_text == "日本テレビ"
     c._apply("Clockformat", "bogus")
-    assert ls.clock_format == "hms"     # 不正値は秒まで
+    assert ls.clock_format == "hm"      # 不正値は分まで
+    c._apply("Clockdate", "slash")
+    assert ls.clock_date == "slash"
+    c._apply("Clockdate", "bogus")
+    assert ls.clock_date == "off"
 
 
 def test_address_settings_not_confused_with_layer_prefix():
@@ -214,4 +227,131 @@ def test_address_settings_not_confused_with_layer_prefix():
     assert cfg.addr_level == "citygun"
     assert cfg.text_format == "{address}付近"
     assert cfg.geo_mode == "auto" and cfg.channel == 4
-    assert ls.addr.font_size == 90      # レイヤは無傷
+    assert ls.addr.font_size == 72      # レイヤは無傷
+
+
+# ---------------- 住所の見せ方 ----------------
+
+def _addr(pref, city, **kw):
+    from nnn_decoder.geocode import Address
+    return Address(pref=pref, city=city, **kw)
+
+
+@pytest.mark.parametrize("pref,want", [
+    ("千葉県", "千葉"), ("東京都", "東京"), ("大阪府", "大阪"),
+    ("京都府", "京都"), ("神奈川県", "神奈川"), ("鹿児島県", "鹿児島"),
+    ("北海道", "北海道"),            # 「北海」にしてはいけない
+])
+def test_strip_pref_suffix(pref, want):
+    from nnn_decoder.geocode import Address
+    assert Address.strip_pref_suffix(pref) == want
+
+
+@pytest.mark.parametrize("name,want", [
+    ("鴨川市", "鴨川"), ("千代田区", "千代田"), ("大町町", "大町"),
+    ("市川市", "市川"),              # 先頭の「市」は残す
+    ("四日市市", "四日市"), ("野々市市", "野々市"),
+    ("東村", "東村"),                # 2文字以下になるなら外さない
+])
+def test_strip_muni_suffix(name, want):
+    from nnn_decoder.geocode import Address
+    assert Address.strip_muni_suffix(name) == want
+
+
+def test_address_short_style():
+    a = _addr("千葉県", "鴨川市")
+    assert a.text("muni") == "千葉県鴨川市"
+    assert a.text("muni", drop_pref_suffix=True, drop_muni_suffix=True,
+                  sep="・") == "千葉・鴨川"
+
+
+def test_address_short_style_offshore():
+    a = _addr("茨城県", "鹿嶋市", offshore=True)
+    assert a.text("muni", "沖", drop_pref_suffix=True,
+                  drop_muni_suffix=True, sep="・") == "茨城・鹿嶋沖"
+    assert a.text("muni", "沿岸", drop_pref_suffix=True,
+                  drop_muni_suffix=True, sep="・") == "茨城・鹿嶋沿岸"
+    assert a.text("muni", "", drop_pref_suffix=True,
+                  drop_muni_suffix=True, sep="・") == "茨城・鹿嶋"
+
+
+def test_address_short_style_designated_city():
+    a = _addr("神奈川県", "横浜市緑区")
+    assert a.text("muni") == "神奈川県横浜市"
+    assert a.text("muni", drop_pref_suffix=True, drop_muni_suffix=True,
+                  sep="・") == "神奈川・横浜"
+    # city レベルは区まで出す。接尾辞は末尾の1文字だけ外す
+    assert a.text("city", drop_pref_suffix=True, drop_muni_suffix=True,
+                  sep="・") == "神奈川・横浜市緑"
+
+
+def test_address_short_style_gun():
+    a = _addr("北海道", "当別町", gun="石狩郡")
+    assert a.text("citygun", drop_pref_suffix=True, drop_muni_suffix=True,
+                  sep="・") == "北海道・石狩郡当別"
+
+
+def test_decoder_text_format_and_suffix():
+    from types import SimpleNamespace
+    from gst_heli.decoder_core import HeliConfig, HeliDecoder
+    cfg = HeliConfig(fs=48000, baud=1200, channel=0)
+    d = HeliDecoder.__new__(HeliDecoder)
+    d.cfg = cfg
+    d._geo = SimpleNamespace(current=_addr("千葉県", "鴨川市"))
+    pkt = SimpleNamespace(alt_m=300.0, lat_wgs84=35.1, lon_wgs84=140.1,
+                          satellites=8)
+    assert d._format(pkt) == "千葉県鴨川市上空"
+    cfg.addr_suffix_on = False
+    assert d._format(pkt) == "千葉県鴨川市"
+    cfg.addr_suffix_on = True
+    cfg.drop_pref_suffix = cfg.drop_muni_suffix = True
+    cfg.addr_sep = "・"
+    assert d._format(pkt) == "千葉・鴨川上空"
+    cfg.addr_suffix = "付近"
+    assert d._format(pkt) == "千葉・鴨川付近"
+    # 旧形式の書式文字列でも落ちないこと(後方互換)
+    cfg.text_format = "{address}上空"
+    assert d._format(pkt) == "千葉・鴨川上空"
+
+
+def test_address_osc_controls():
+    c, cfg, _ls = _ctrl()
+    c._apply("Addrdroppref", 1)
+    c._apply("Addrdropmuni", 1)
+    c._apply("Addrsep", "・")
+    c._apply("Addroffshore", "沿岸")
+    c._apply("Addrsuffix", "上空")
+    c._apply("Addrsuffixon", 0)
+    assert cfg.drop_pref_suffix and cfg.drop_muni_suffix
+    assert cfg.addr_sep == "・" and cfg.offshore_suffix == "沿岸"
+    assert cfg.addr_suffix == "上空" and cfg.addr_suffix_on is False
+
+
+# ---------------- 縦並べ直し ----------------
+
+def test_stack_vertically_no_overlap():
+    from gst_heli.renderer import LAYER_KEYS, stack_vertically
+    ls = LayerSet()
+    ls.addr.font_size = 96          # サイズがバラバラでも重ならないこと
+    ls.clock.font_size = 48
+    ls.station.margin_x = 999       # 位置がずれていても揃うこと
+    styles = {k: ls.style(k) for k in LAYER_KEYS}
+    stack_vertically(styles, LAYER_KEYS, x=80, top=600, align="left")
+    ys = [styles[k].margin_y for k in LAYER_KEYS]
+    assert ys == [600, 600 + int(96 * 1.3), 600 + int(96 * 1.3) + int(48 * 1.3)] \
+        or ys[0] == 600 and ys[1] > ys[0] and ys[2] > ys[1]
+    assert all(styles[k].margin_x == 80 for k in LAYER_KEYS)
+    assert all(styles[k].align_x == "left" for k in LAYER_KEYS)
+
+
+def test_stack_vertically_keeps_lines_apart_when_rendered():
+    """実際に描いたときに行が重ならないこと."""
+    from gst_heli.renderer import LAYER_KEYS, stack_vertically
+    ls = LayerSet()
+    styles = {k: ls.style(k) for k in LAYER_KEYS}
+    stack_vertically(styles, LAYER_KEYS, x=20, top=20, align="left")
+    r = SuperRenderer(1920, 1080, SuperStyle())
+    boxes = [r.layer_bbox(Layer(k, "千葉・鴨川上空", styles[k]))
+             for k in LAYER_KEYS]
+    for a, b in zip(boxes, boxes[1:]):
+        assert a[3] < b[1], f"行が重なっている: {a} と {b}"
