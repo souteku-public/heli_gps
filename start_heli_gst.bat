@@ -13,6 +13,10 @@ cd /d "%~dp0"
 rem --- settings (edit for your site) ---
 set "CHANNEL=2"
 set "MODE=1080i5994"
+rem VMODE = INPUT signal format. Must match the incoming SDI.
+rem   "auto" relies on the card's auto-detect, which is not always
+rem   available - if the input is not captured, GPS audio stops too.
+set "VMODE=1080i5994"
 set "KEYER=external"
 set "INDEV=0"
 set "OUTDEV=0"
@@ -27,7 +31,8 @@ python -c "import numpy, PIL" >nul 2>&1 || goto :err_deps
 
 echo Starting sender (console shows logs)...
 start "HeliGPS Sender" cmd /k python -m gst_heli.app --source decklink --output decklink ^
-    --output-mode fillkey --osc-control --channel %CHANNEL% --mode %MODE% --keyer %KEYER% ^
+    --output-mode fillkey --osc-control --channel %CHANNEL% --mode %MODE% ^
+    --vmode %VMODE% --keyer %KEYER% ^
     --in-device %INDEV% --out-device %OUTDEV% %EXTRA%
 
 echo Starting control UI...

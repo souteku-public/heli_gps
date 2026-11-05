@@ -424,8 +424,13 @@ def run(args):
             audio_port=args.audio_port, video_port=args.video_port,
             gst_bin=args.gst_bin, interlace=not args.no_interlace,
             deinterlace=args.deinterlace,
-            out_mode=args.output_mode, av_offset_ms=args.av_offset_ms)
+            out_mode=args.output_mode, av_offset_ms=args.av_offset_ms,
+            audio_only=getattr(args, "audio_only", False))
         bridge.start()
+        if getattr(args, "audio_only", False):
+            _audio_only_banner(args)
+            threading.Thread(target=_audio_only_report, args=(decoder,),
+                             daemon=True).start()
         try:
             bridge.wait()
         except KeyboardInterrupt:
@@ -457,6 +462,36 @@ def run(args):
     if ctrl:
         ctrl.close()
     decoder.close()
+
+
+def _audio_only_banner(args):
+    print("=" * 62, flush=True)
+    print("  GPS受信チェック（SDI出力なし・切り分け用）", flush=True)
+    print(f"  入力デバイス={args.in_device}  接続={args.vconnection}  "
+          f"映像mode={args.vmode}", flush=True)
+    print(f"  GPS音声ch={args.channel + 1}(CH{args.channel + 1})  "
+          f"入力ch数={args.channels}  baud={args.baud}", flush=True)
+    print("-" * 62, flush=True)
+    print("  [audio] ch levels … 各chの音量。GPSのchだけ値が立っていればOK", flush=True)
+    print("  [gps]   packets   … 増えていけば復調できています", flush=True)
+    print("  終了するには Ctrl+C またはこの窓を閉じてください", flush=True)
+    print("=" * 62, flush=True)
+
+
+def _audio_only_report(decoder, interval_s: float = 2.0):
+    """切り分けモードで、復調状況を定期的に表示する."""
+    last = -1
+    while True:
+        time.sleep(interval_s)
+        n = decoder.packets_ok
+        st = decoder.status()
+        if n != last:
+            last = n
+            print(f"  [gps] packets={n}  受信={st['receiving']}  "
+                  f"住所={st['address'] or '—'}", flush=True)
+        elif n == 0:
+            print("  [gps] packets=0 … まだ1つも復調できていません"
+                  "（音声chと入力レベルを確認してください）", flush=True)
 
 
 def _run_file_mode(args, decoder, renderer, current_frame, cache):
@@ -558,6 +593,9 @@ def build_parser():
     ap.add_argument("--gst-bin", default=None, help="gst-launch-1.0のパス(未指定は自動探索)")
     ap.add_argument("--no-interlace", action="store_true",
                     help="出力caps に interlace-mode=interleaved を付けない")
+    ap.add_argument("--audio-only", action="store_true",
+                    help="切り分け用: SDI出力を一切行わず、GPS音声の受信だけを確認する。"
+                         "ここでGPSが受かれば入力側は正常＝原因は出力側")
 
     ap.add_argument("--osc-control", action="store_true", help="control_ui からの操作を受ける")
     ap.add_argument("--ctrl-port", type=int, default=9001)

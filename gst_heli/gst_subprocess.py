@@ -95,7 +95,10 @@ class GstSubprocessBridge:
                  interlace=True, on_log=None,
                  preview=False, preview_width=960, preview_height=540,
                  deinterlace=True, audio_debug=True, audio_timestamp=True,
-                 out_mode="fillkey", av_offset_ms=0):
+                 out_mode="fillkey", av_offset_ms=0, audio_only=False):
+        # 切り分け用: 映像出力を一切つながず、GPS音声の取り込みだけを行う。
+        # これで「入力が悪いのか、出力が悪いのか」をはっきりさせられる。
+        self.audio_only = audio_only
         self.out_mode = out_mode          # "fillkey"=Fill&Key / "burnin"=焼き込み
         self.av_offset_ms = av_offset_ms  # バーンイン時の音声A/V補正(+で音声を遅らせる)
         self.preview = preview
@@ -118,6 +121,7 @@ class GstSubprocessBridge:
         self.interlace = interlace
         self.on_log = on_log or (lambda s: print(s, flush=True))
         self._proc = None
+        self._errors: list[str] = []
         self._audio_srv = None
         self._video_srv = None
         self._frame_bytes = width * height * 4
@@ -167,11 +171,22 @@ class GstSubprocessBridge:
                 break
 
     def _build_cmd(self):
+        if self.audio_only:
+            return self._build_cmd_audio_only()
         if self.preview:
             return self._build_cmd_preview()
         if self.out_mode == "burnin":
             return self._build_cmd_burnin()
         return self._build_cmd_output()
+
+    def _build_cmd_audio_only(self):
+        """切り分け用: 映像入力(音声取得に必須)＋GPS音声だけ。SDI出力なし.
+
+        本番と同じ device-number / connection / mode / channels を使うので、
+        これで GPS が受かれば**入力側は正常**＝原因は出力側にある、と分かる。
+        """
+        vin = self._video_in(["fakesink", "sync=false"])
+        return [self.gst, "-e"] + vin + self._audio_sink_branch()
 
     # 音声取得のブランチ(音声には映像入力が必須なので decklinkvideosrc も動かす)
     def _audio_sink_branch(self):
@@ -289,11 +304,61 @@ class GstSubprocessBridge:
 
     def _log_loop(self):
         for line in self._proc.stdout:
-            self.on_log("[gst] " + line.rstrip())
+            line = line.rstrip()
+            self.on_log("[gst] " + line)
+            low = line.lower()
+            if "error" in low or "warning" in low or "failed" in low:
+                self._errors.append(line)
+                del self._errors[:-20]        # 直近20行だけ覚えておく
+
+    # gst の失敗メッセージ → 日本語の原因・対処
+    _HINTS = (
+        ("failed to schedule", "出力が基準同期(REF/ゲンロック)に乗れていません。"
+                               "REFケーブルと Desktop Video Setup の設定を確認してください"),
+        ("in use", "DeckLink が他のアプリに使われています。Media Express / "
+                   "プレビュー / もう一方の起動バッチを閉じてください"),
+        ("no such element", "GStreamer が Complete で入っていません。"
+                            "Runtime と Development を【Complete】で入れ直してください"),
+        ("not configured to support", "そのデバイスでは入力と出力を同時に使えません。"
+                                      "Desktop Video Setup で半二重/全二重(Duplex)の設定を"
+                                      "見直すか、入出力を別デバイスに分けてください"),
+        ("mode", "入力または出力のフォーマット指定が合っていない可能性があります"
+                 "（VMODE / MODE を実際の信号に合わせてください）"),
+    )
+
+    def diagnose(self) -> str:
+        """gst が落ちた理由の見立てを返す(見つからなければ空文字)."""
+        if not self._errors:
+            return ""
+        out = ["", "=" * 60, "  gst-launch が停止しました。直近のメッセージ:", "=" * 60]
+        out += ["  " + e for e in self._errors[-8:]]
+        hits, seen = [], set()
+        for line in self._errors:
+            low = line.lower()
+            for key, hint in self._HINTS:
+                if key in low and hint not in seen:
+                    seen.add(hint)
+                    hits.append(hint)
+        if hits:
+            out += ["-" * 60, "  考えられる原因:"]
+            out += [f"   ・{h}" for h in hits]
+        out += ["-" * 60,
+                "  ※ 映像出力が失敗すると、同じパイプライン内の音声取り込みも"
+                "一緒に止まります(GPSが受からなくなります)。",
+                "  ※ 入力側だけを切り分けるには check_signal.bat を実行してください。",
+                "=" * 60, ""]
+        return "\n".join(out)
 
     def wait(self):
         if self._proc:
-            self._proc.wait()
+            rc = self._proc.wait()
+            if rc != 0:
+                msg = self.diagnose()
+                if msg:
+                    self.on_log(msg)
+                else:
+                    self.on_log(f"\n[gst] 終了コード {rc} で停止しました。"
+                                "上のログを確認してください。")
 
     def stop(self):
         if self._proc and self._proc.poll() is None:
