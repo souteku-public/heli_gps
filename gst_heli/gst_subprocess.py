@@ -18,6 +18,7 @@ interlace-mode=interleaved, video-format=8bit-bgra, keyer-mode=external)。
 
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 import subprocess
@@ -43,20 +44,83 @@ def find_gst_launch(explicit: str | None = None) -> str:
     return "gst-launch-1.0"
 
 
-class _TcpServer:
-    """1接続だけ受ける小さなTCPサーバ(localhost)."""
+class PortError(RuntimeError):
+    """localhost のポートが使えない(他のプロセスが使用中 等)."""
 
-    def __init__(self, port: int, handler):
-        self.port = port
+
+class _TcpServer:
+    """1接続だけ受ける小さなTCPサーバ(localhost).
+
+    ポートの扱いに Windows 固有の注意がある:
+
+      SO_REUSEADDR は Unix と Windows で**意味が違う**。Windows では
+      「他のプロセスが現に待ち受けているポートにも重ねて bind できる」
+      という挙動になり、bind は成功するのに接続はそちらに届かない
+      (gst 側は『接続が拒否されました』になる) という分かりにくい
+      故障を起こす。そのため Windows では SO_EXCLUSIVEADDRUSE を使い、
+      ぶつかったら**はっきり失敗させて**別のポートに移る。
+    """
+
+    def __init__(self, port: int, handler, label: str = ""):
         self._handler = handler
-        self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._srv.bind(("127.0.0.1", port))
-        self._srv.listen(1)
+        self.label = label
+        self._srv = None
+        self.port = self._bind(port)
+        self._selftest()                 # 本当に接続できるか確かめてから使う
         self._srv.settimeout(0.5)
         self._stop = False
         self._th = threading.Thread(target=self._run, daemon=True)
         self._th.start()
+
+    # ---- bind: 希望ポート → だめなら空きポート ----
+    def _bind(self, want: int) -> int:
+        errs = []
+        for p in (want, 0):              # 0 = OSに空きを選ばせる
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if os.name == "nt":
+                # Windows: 重ね bind を禁止し、競合をここで検出する
+                try:
+                    srv.setsockopt(socket.SOL_SOCKET,
+                                   getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
+                except OSError:
+                    pass
+            else:
+                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                srv.bind(("127.0.0.1", p))
+                srv.listen(4)
+            except OSError as e:
+                errs.append(f"port {p or 'auto'}: {e}")
+                srv.close()
+                continue
+            self._srv = srv
+            return srv.getsockname()[1]
+        raise PortError(f"{self.label}: localhost のポートを確保できません "
+                        + " / ".join(errs))
+
+    def _selftest(self) -> None:
+        """自分で自分に繋いでみて、loopback が本当に通るか確かめる.
+
+        ファイアウォール/セキュリティ製品が loopback を遮っている場合も
+        ここで分かる(gst を起動してから謎のエラーになるのを防ぐ)。
+        """
+        self._srv.settimeout(3.0)
+        try:
+            probe = socket.create_connection(("127.0.0.1", self.port), timeout=3.0)
+        except OSError as e:
+            self._srv.close()
+            raise PortError(
+                f"{self.label}: 127.0.0.1:{self.port} に接続できません ({e})。"
+                "ファイアウォール/セキュリティ製品が localhost の通信を"
+                "遮っていないか確認してください") from e
+        try:
+            conn, _ = self._srv.accept()
+            conn.close()
+        except OSError as e:
+            self._srv.close()
+            raise PortError(f"{self.label}: loopback の自己接続に失敗 ({e})") from e
+        finally:
+            probe.close()
 
     def _run(self):
         while not self._stop:
@@ -292,9 +356,24 @@ class GstSubprocessBridge:
         return [self.gst, "-e"] + vin + telop + comp + self._audio_branch_burnin()
 
     def start(self):
-        # サーバを先に立ててから gst を起動(接続先が居る状態にする)
-        self._audio_srv = _TcpServer(self.audio_port, self._audio_handler)
-        self._video_srv = _TcpServer(self.video_port, self._video_handler)
+        # サーバを先に立ててから gst を起動(接続先が居る状態にする)。
+        # 希望ポートが他のプロセスに使われていたら空きポートへ自動で移る。
+        # gst へは「実際に確保できたポート」を渡すので番号は何でもよい。
+        self._audio_srv = _TcpServer(self.audio_port, self._audio_handler,
+                                     label="音声(GPS)")
+        if self._audio_srv.port != self.audio_port:
+            self.on_log(f"[port] 音声ポート {self.audio_port} は使用中のため "
+                        f"{self._audio_srv.port} を使います")
+            self.audio_port = self._audio_srv.port
+        if self.audio_only:
+            self._video_srv = None       # 映像は出さないのでサーバ不要
+        else:
+            self._video_srv = _TcpServer(self.video_port, self._video_handler,
+                                         label="映像(テロップ)")
+            if self._video_srv.port != self.video_port:
+                self.on_log(f"[port] 映像ポート {self.video_port} は使用中のため "
+                            f"{self._video_srv.port} を使います")
+                self.video_port = self._video_srv.port
         cmd = self._build_cmd()
         self.on_log("gst-launch 起動:\n  " + " ".join(cmd))
         self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
@@ -317,6 +396,11 @@ class GstSubprocessBridge:
                                "REFケーブルと Desktop Video Setup の設定を確認してください"),
         ("in use", "DeckLink が他のアプリに使われています。Media Express / "
                    "プレビュー / もう一方の起動バッチを閉じてください"),
+        ("failed to connect to host", "gst から本体(Python)への localhost 接続が"
+                                      "できませんでした。ファイアウォール/セキュリティ製品が"
+                                      "loopback を遮っていないか確認してください"),
+        ("could not open resource", "gst から本体(Python)への localhost 接続が"
+                                    "できませんでした(同上)"),
         ("no such element", "GStreamer が Complete で入っていません。"
                             "Runtime と Development を【Complete】で入れ直してください"),
         ("not configured to support", "そのデバイスでは入力と出力を同時に使えません。"

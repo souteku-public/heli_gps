@@ -336,6 +336,7 @@ heli_gps\
 
 | 症状 | 原因・対処 |
 |---|---|
+| **`Failed to connect to host '127.0.0.1:5001'`** / `接続できませんでした` | gst から本体への localhost 接続ができていません。**ヘリGPSの別の窓が開いていないか**確認して全部閉じ、やり直してください。使用中のポートは自動で空きに切り替わります（`[port] …を使います` と表示）。それでも出る場合はファイアウォール/セキュリティ製品が loopback を遮っていないか確認 |
 | **プレビューは動くが、本番用の2つでGPSを受信しない** | **§9-2 の切り分け手順**を実施してください。多くは出力側（REF／Duplex／デバイス競合）が原因で、出力が失敗すると**音声取り込みも一緒に止まります** |
 | **`ModuleNotFoundError: No module named 'numpy'`**（または `'PIL'`） | **依存パッケージが未導入**。`setup_check.bat` をダブルクリックしてください。手動なら `python -m pip install -r requirements.txt` |
 | `No module named 'tkinter'` | Python のインストール時に tcl/tk が外れています。Python を「Modify」→ **tcl/tk and IDLE** にチェックを入れて入れ直す |

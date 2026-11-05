@@ -426,7 +426,22 @@ def run(args):
             deinterlace=args.deinterlace,
             out_mode=args.output_mode, av_offset_ms=args.av_offset_ms,
             audio_only=getattr(args, "audio_only", False))
-        bridge.start()
+        try:
+            bridge.start()
+        except Exception as e:
+            from .gst_subprocess import PortError
+            print("\n" + "=" * 60, flush=True)
+            print("  起動できませんでした", flush=True)
+            print("=" * 60, flush=True)
+            print(f"  {e}", flush=True)
+            if isinstance(e, PortError):
+                print("-" * 60, flush=True)
+                print("  ・ヘリGPSの別の窓（送出本体／プレビュー）が開いていませんか。"
+                      "全部閉じてからやり直してください", flush=True)
+                print("  ・それでも直らない場合は、バッチの AUDIOPORT / VIDEOPORT を"
+                      "別の番号に変えてください", flush=True)
+            print("=" * 60 + "\n", flush=True)
+            raise SystemExit(1)
         if getattr(args, "audio_only", False):
             _audio_only_banner(args)
             threading.Thread(target=_audio_only_report, args=(decoder,),

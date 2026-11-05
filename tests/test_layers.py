@@ -355,3 +355,60 @@ def test_stack_vertically_keeps_lines_apart_when_rendered():
              for k in LAYER_KEYS]
     for a, b in zip(boxes, boxes[1:]):
         assert a[3] < b[1], f"行が重なっている: {a} と {b}"
+
+
+# ---------------- localhost ポートの確保 ----------------
+
+def test_tcpserver_falls_back_when_port_is_taken():
+    """希望ポートが他プロセスに使われていたら、空きポートへ自動で移ること.
+
+    Windows の SO_REUSEADDR は「他プロセスが待ち受け中のポートにも重ねて
+    bind できる」挙動のため、以前はここで bind だけ成功し、gst 側が
+    『接続が拒否されました』になっていた。
+    """
+    import socket
+    from gst_heli.gst_subprocess import _TcpServer
+
+    squat = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    squat.bind(("127.0.0.1", 0))
+    squat.listen(1)
+    taken = squat.getsockname()[1]
+    srv = None
+    try:
+        srv = _TcpServer(taken, lambda c, s: None, label="test")
+        assert srv.port != taken, "使用中のポートを掴んでしまっている"
+        # 移った先に本当に接続できること
+        c = socket.create_connection(("127.0.0.1", srv.port), timeout=3)
+        c.close()
+    finally:
+        if srv:
+            srv.close()
+        squat.close()
+
+
+def test_tcpserver_uses_requested_port_when_free():
+    import socket
+    from gst_heli.gst_subprocess import _TcpServer
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    free = probe.getsockname()[1]
+    probe.close()
+    srv = _TcpServer(free, lambda c, s: None, label="test")
+    try:
+        assert srv.port == free
+    finally:
+        srv.close()
+
+
+def test_audio_only_pipeline_has_no_output():
+    """切り分けモードは SDI 出力要素を一切含まないこと(REF不要・安全)."""
+    from gst_heli.gst_subprocess import GstSubprocessBridge
+    b = GstSubprocessBridge(lambda: None, lambda a, n: None, audio_only=True,
+                            vmode="1080i5994", gst_bin="gst-launch-1.0")
+    cmd = " ".join(b._build_cmd())
+    assert "decklinkvideosink" not in cmd
+    assert "decklinkaudiosink" not in cmd
+    assert "autovideosink" not in cmd
+    assert "decklinkvideosrc" in cmd and "decklinkaudiosrc" in cmd
+    assert "mode=1080i5994" in cmd
