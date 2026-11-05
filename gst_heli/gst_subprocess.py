@@ -285,9 +285,8 @@ class GstSubprocessBridge:
         pw, ph = self.preview_width, self.preview_height
         scale_caps = f"video/x-raw,format=BGRA,width={pw},height={ph}"
         # 入力映像: deinterlace → 窓サイズにスケール → compositor sink_0
-        vin_tail = ((["deinterlace", "!"] if self.deinterlace else [])
-                    + ["videoconvert", "!", "videoscale", "!", scale_caps, "!", "comp.sink_0"])
-        vin = self._video_in(vin_tail)
+        vin = self._video_in(self._compositor_in()
+                             + ["videoscale", "!", scale_caps, "!", "comp.sink_0"])
         # テロップ: 窓サイズにスケール → compositor sink_1(アルファ合成で上に乗る)
         telop = (self._telop_src()
                  + ["videoscale", "!", "videoconvert", "!", scale_caps, "!", "comp.sink_1"])
@@ -338,11 +337,34 @@ class GstSubprocessBridge:
                 "decklinkaudiosink", f"device-number={self.out_device}",
                 f"ts-offset={off_ns}"]
 
+    def _compositor_in(self):
+        """入力映像を compositor に入れられる形にする要素列.
+
+        **compositor はインターレース映像を受け取れない**(キャプス交渉に失敗し
+        `not-negotiated` でソースが止まる)。1080i を扱うので、どちらかが必須:
+
+          deinterlace=True (既定)
+              deinterlace 要素を通してプログレッシブにする。確実に動くが、
+              出力は「プログレッシブをiの器に入れた」ものになり、
+              動きの速い映像では解像感が落ちる。
+
+          deinterlace=False (--keep-interlaced)
+              画は一切変えず、capssetter で interlace-mode だけを
+              progressive と名乗らせて合成する。テロップは静止しているので
+              両フィールドに同じ文字が乗り、結果は正しい。
+              出力側で再び interleaved に戻す(下の capssetter)。
+              画質は落ちないが、環境によっては交渉に失敗しうる。
+        """
+        if self.deinterlace:
+            return ["deinterlace", "!", "videoconvert", "!"]
+        # join=true(既定) なので、指定した interlace-mode だけが上書きされ、
+        # format/width/height/framerate は入力のまま引き継がれる。
+        return ["capssetter", "caps=video/x-raw,interlace-mode=progressive", "!",
+                "videoconvert", "!"]
+
     def _build_cmd_burnin(self):
-        # 入力映像 → (任意deinterlace) → compositor.sink_0
-        vin_tail = ((["deinterlace", "!"] if self.deinterlace else [])
-                    + ["videoconvert", "!", "comp.sink_0"])
-        vin = self._video_in(vin_tail)
+        # 入力映像 → (deinterlace もしくは progressive 名乗り) → compositor.sink_0
+        vin = self._video_in(self._compositor_in() + ["comp.sink_0"])
         # テロップ(BGRA/α) → compositor.sink_1(アルファ合成で上に乗る)
         telop = self._telop_src() + ["videoconvert", "!", "comp.sink_1"]
         # 合成 → 番組映像として焼き込み出力(keyer=off)
@@ -396,6 +418,12 @@ class GstSubprocessBridge:
                                "REFケーブルと Desktop Video Setup の設定を確認してください"),
         ("in use", "DeckLink が他のアプリに使われています。Media Express / "
                    "プレビュー / もう一方の起動バッチを閉じてください"),
+        ("not-negotiated", "映像のキャプス交渉に失敗しました。インターレース"
+                           "(1080i)のまま compositor に入れようとしている可能性が"
+                           "あります。バッチの EXTRA から --keep-interlaced を外して"
+                           "ください(既定のデインターレース動作に戻ります)"),
+        ("internal data stream error", "上流の要素が停止しました。直前の "
+                                       "not-negotiated / エラー行を確認してください"),
         ("failed to connect to host", "gst から本体(Python)への localhost 接続が"
                                       "できませんでした。ファイアウォール/セキュリティ製品が"
                                       "loopback を遮っていないか確認してください"),

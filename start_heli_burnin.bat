@@ -18,6 +18,12 @@ set "VMODE=1080i5994"
 set "INDEV=0"
 set "OUTDEV=0"
 set "AVOFFSET=0"
+rem EXTRA: optional flags.
+rem   --keep-interlaced
+rem     Do NOT deinterlace the input. Keeps the original 1080i picture
+rem     (better quality for fast motion), overlaying the static super on
+rem     both fields. Try this once burn-in works; if the picture does not
+rem     come out, remove it to go back to the default (deinterlace).
 set "EXTRA="
 set "GST1=C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
 set "GST2=C:\gstreamer\1.0\msvc_x86_64\bin"

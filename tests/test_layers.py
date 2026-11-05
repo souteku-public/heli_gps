@@ -412,3 +412,39 @@ def test_audio_only_pipeline_has_no_output():
     assert "autovideosink" not in cmd
     assert "decklinkvideosrc" in cmd and "decklinkaudiosrc" in cmd
     assert "mode=1080i5994" in cmd
+
+
+# ---------------- インターレース映像と compositor ----------------
+
+def _burnin_cmd(**kw):
+    from gst_heli.gst_subprocess import GstSubprocessBridge
+    b = GstSubprocessBridge(lambda: None, lambda a, n: None, out_mode="burnin",
+                            vmode="1080i5994", gst_bin="gst-launch-1.0", **kw)
+    return " ".join(b._build_cmd())
+
+
+def test_burnin_feeds_progressive_into_compositor():
+    """compositor はインターレースを受け取れないので、既定では必ず
+    deinterlace を通すこと(ここが抜けると not-negotiated で止まる)."""
+    cmd = _burnin_cmd()
+    src = cmd[cmd.index("decklinkvideosrc"):cmd.index("comp.sink_0")]
+    assert "deinterlace" in src, "compositor の手前に deinterlace が無い"
+
+
+def test_burnin_keep_interlaced_relabels_to_progressive():
+    """--keep-interlaced では画を変えず、interlace-mode だけ名乗り替える."""
+    cmd = _burnin_cmd(deinterlace=False)
+    src = cmd[cmd.index("decklinkvideosrc"):cmd.index("comp.sink_0")]
+    assert "deinterlace" not in src
+    assert "capssetter caps=video/x-raw,interlace-mode=progressive" in src
+    # 出力側では interleaved に戻していること
+    assert "interlace-mode=interleaved" in cmd
+
+
+def test_preview_also_feeds_progressive_into_compositor():
+    from gst_heli.gst_subprocess import GstSubprocessBridge
+    b = GstSubprocessBridge(lambda: None, lambda a, n: None, preview=True,
+                            vmode="1080i5994", gst_bin="gst-launch-1.0")
+    cmd = " ".join(b._build_cmd())
+    src = cmd[cmd.index("decklinkvideosrc"):cmd.index("comp.sink_0")]
+    assert "deinterlace" in src
