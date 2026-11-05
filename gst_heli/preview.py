@@ -87,6 +87,8 @@ def main():
         gst_bin=args.gst_bin,
         preview=True, preview_width=args.preview_width,
         preview_height=args.preview_height,
+        # PC画面で見るためデインターレースする(送出とは別の判断)
+        deinterlace=True,
         audio_timestamp=not args.no_audio_timestamp)
 
     # 2秒ごとに復調状況を表示(受信/パケット数)

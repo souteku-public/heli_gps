@@ -423,28 +423,93 @@ def _burnin_cmd(**kw):
     return " ".join(b._build_cmd())
 
 
-def test_burnin_feeds_progressive_into_compositor():
-    """compositor はインターレースを受け取れないので、既定では必ず
-    deinterlace を通すこと(ここが抜けると not-negotiated で止まる)."""
+def test_burnin_keeps_1080i_and_matches_both_compositor_inputs():
+    """既定: 入力は 1080i のまま。テロップ側を interleaved に揃える.
+
+    compositor は 2 入力のインターレース指定が食い違うと交渉に失敗する
+    (not-negotiated)。画質を落とさないため、入力を変換するのではなく
+    テロップ側を合わせる。
+    """
     cmd = _burnin_cmd()
     src = cmd[cmd.index("decklinkvideosrc"):cmd.index("comp.sink_0")]
-    assert "deinterlace" in src, "compositor の手前に deinterlace が無い"
+    telop = cmd[cmd.index("tcpclientsrc"):cmd.index("comp.sink_1")]
+    assert "deinterlace" not in src, "既定で入力を変換してはいけない(画質が落ちる)"
+    assert "interlaced=true" in telop, "テロップ側が入力とそろっていない"
+    assert "interlace-mode=interleaved" in cmd, "出力が 1080i になっていない"
 
 
-def test_burnin_keep_interlaced_relabels_to_progressive():
-    """--keep-interlaced では画を変えず、interlace-mode だけ名乗り替える."""
-    cmd = _burnin_cmd(deinterlace=False)
+def test_burnin_deinterlace_option_matches_both_inputs_too():
+    """--deinterlace のときは両方 progressive でそろえること."""
+    cmd = _burnin_cmd(deinterlace=True)
     src = cmd[cmd.index("decklinkvideosrc"):cmd.index("comp.sink_0")]
-    assert "deinterlace" not in src
-    assert "capssetter caps=video/x-raw,interlace-mode=progressive" in src
-    # 出力側では interleaved に戻していること
-    assert "interlace-mode=interleaved" in cmd
+    telop = cmd[cmd.index("tcpclientsrc"):cmd.index("comp.sink_1")]
+    assert "deinterlace" in src
+    assert "interlaced=true" not in telop, "入力は progressive なのにテロップが i"
 
 
-def test_preview_also_feeds_progressive_into_compositor():
+def test_preview_deinterlaces_for_pc_display():
+    """プレビューはPC画面で見るのでデインターレースする(両入力 progressive)."""
     from gst_heli.gst_subprocess import GstSubprocessBridge
     b = GstSubprocessBridge(lambda: None, lambda a, n: None, preview=True,
-                            vmode="1080i5994", gst_bin="gst-launch-1.0")
+                            vmode="1080i5994", gst_bin="gst-launch-1.0",
+                            deinterlace=True)      # preview.py と同じ指定
     cmd = " ".join(b._build_cmd())
     src = cmd[cmd.index("decklinkvideosrc"):cmd.index("comp.sink_0")]
+    telop = cmd[cmd.index("tcpclientsrc"):cmd.index("comp.sink_1")]
     assert "deinterlace" in src
+    assert "interlaced=true" not in telop
+
+
+def test_bridge_default_does_not_touch_the_picture():
+    """コンストラクタ既定は「画に手を加えない」であること.
+
+    ここが True だと、既定に頼った呼び出し側と明示指定した側で食い違い、
+    compositor の交渉が失敗する(実際にこの不具合が起きた)。
+    """
+    import inspect
+    from gst_heli.gst_subprocess import GstSubprocessBridge
+    sig = inspect.signature(GstSubprocessBridge.__init__)
+    assert sig.parameters["deinterlace"].default is False
+
+
+def test_preview_module_asks_for_deinterlace_explicitly():
+    """preview.py が既定任せにせず明示的に指定していること."""
+    import pathlib as _p
+    src = _p.Path(__file__).resolve().parent.parent / "gst_heli" / "preview.py"
+    assert "deinterlace=True" in src.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("deinterlace", [False, True])
+def test_burnin_pipeline_actually_negotiates(tmp_path, deinterlace):
+    """生成したパイプラインを実際に gst-launch で流し、交渉が通ることを確かめる.
+
+    DeckLink 部分だけ videotestsrc / fakesink に差し替える。
+    GStreamer が無い環境では skip。
+    """
+    import re
+    import shutil
+    import subprocess
+    if not shutil.which("gst-launch-1.0"):
+        pytest.skip("GStreamer が無い環境")
+
+    telop = tmp_path / "telop.bgra"
+    telop.write_bytes(bytes(1920 * 1080 * 4) * 3)
+
+    line = _burnin_cmd(deinterlace=deinterlace)
+    line = re.sub(r"decklinkvideosrc [^!]*!",
+                  'videotestsrc num-buffers=3 ! "video/x-raw,format=UYVY,'
+                  'width=1920,height=1080,framerate=30000/1001,'
+                  'interlace-mode=interleaved" !', line)
+    line = re.sub(r"tcpclientsrc [^!]*!", f"filesrc location={telop} !", line)
+    line = re.sub(r"decklinkvideosink.*?keyer-mode=off", "fakesink", line)
+    line = re.sub(r"decklinkaudiosrc [^!]*!",
+                  'audiotestsrc num-buffers=10 ! '
+                  '"audio/x-raw,rate=48000,channels=8" !', line)
+    line = re.sub(r"tcpclientsink \S+ \S+ \S+", "fakesink", line)
+    line = re.sub(r"decklinkaudiosink \S+ \S+", "fakesink", line)
+
+    r = subprocess.run(line, shell=True, capture_output=True, text=True,
+                       timeout=120)
+    out = r.stdout + r.stderr
+    assert "not-negotiated" not in out, out[-800:]
+    assert "ERROR" not in out, out[-800:]

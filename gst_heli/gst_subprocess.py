@@ -158,7 +158,10 @@ class GstSubprocessBridge:
                  audio_port=5001, video_port=5002, gst_bin=None,
                  interlace=True, on_log=None,
                  preview=False, preview_width=960, preview_height=540,
-                 deinterlace=True, audio_debug=True, audio_timestamp=True,
+                 # 既定は「画に手を加えない」。デインターレースしたい呼び出し側
+                 # (プレビュー)が明示的に True を渡すこと。既定に頼って両者が
+                 # 食い違うと compositor の交渉が失敗する(not-negotiated)。
+                 deinterlace=False, audio_debug=True, audio_timestamp=True,
                  out_mode="fillkey", av_offset_ms=0, audio_only=False):
         # 切り分け用: 映像出力を一切つながず、GPS音声の取り込みだけを行う。
         # これで「入力が悪いのか、出力が悪いのか」をはっきりさせられる。
@@ -275,11 +278,18 @@ class GstSubprocessBridge:
         return ["decklinkvideosrc", f"device-number={self.in_device}",
                 f"connection={self.vconnection}", f"mode={self.vmode}", "!"] + sink
 
-    def _telop_src(self):
-        # Pythonから来る BGRA テロップ(TCP) をフレームに切り出す
+    def _telop_src(self, interlaced: bool = False):
+        """Pythonから来る BGRA テロップ(TCP) をフレームに切り出す.
+
+        interlaced=True のとき interleaved と名乗らせる。compositor は
+        2入力のインターレース指定が揃っていないと交渉に失敗するため、
+        1080i をそのまま合成する場合はこちらを使う。
+        """
         return ["tcpclientsrc", "host=127.0.0.1", f"port={self.video_port}", "!",
                 "rawvideoparse", "use-sink-caps=false", "format=bgra",
-                f"width={self.width}", f"height={self.height}", f"framerate={self.framerate}", "!"]
+                f"width={self.width}", f"height={self.height}",
+                f"framerate={self.framerate}"]  \
+            + (["interlaced=true"] if interlaced else []) + ["!"]
 
     def _build_cmd_preview(self):
         pw, ph = self.preview_width, self.preview_height
@@ -338,35 +348,39 @@ class GstSubprocessBridge:
                 f"ts-offset={off_ns}"]
 
     def _compositor_in(self):
-        """入力映像を compositor に入れられる形にする要素列.
+        """入力映像を compositor に入れる要素列.
 
-        **compositor はインターレース映像を受け取れない**(キャプス交渉に失敗し
-        `not-negotiated` でソースが止まる)。1080i を扱うので、どちらかが必須:
+        compositor 自体はインターレース映像を扱える。ただし
+        **2つの入力でインターレースの有無が食い違うと交渉に失敗する**
+        (`not-negotiated` でソースが止まる)。入力が 1080i、テロップが
+        progressive のままだとこれに当たる。そこで
 
-          deinterlace=True (既定)
-              deinterlace 要素を通してプログレッシブにする。確実に動くが、
-              出力は「プログレッシブをiの器に入れた」ものになり、
-              動きの速い映像では解像感が落ちる。
+          deinterlace=False (既定)
+              入力は 1080i のまま。テロップ側を interleaved と名乗らせて
+              揃える(_telop_src(interlaced=True))。**画に一切手を加えない**。
+              テロップは静止しているので両フィールドに同じ文字が乗り、
+              結果は正しい。
 
-          deinterlace=False (--keep-interlaced)
-              画は一切変えず、capssetter で interlace-mode だけを
-              progressive と名乗らせて合成する。テロップは静止しているので
-              両フィールドに同じ文字が乗り、結果は正しい。
-              出力側で再び interleaved に戻す(下の capssetter)。
-              画質は落ちないが、環境によっては交渉に失敗しうる。
+          deinterlace=True (--deinterlace)
+              入力をプログレッシブに変換して合成する。テロップ側も
+              progressive のままなので揃う。1080i の解像感は落ちるため、
+              既定では使わない(プレビュー表示など用)。
         """
         if self.deinterlace:
             return ["deinterlace", "!", "videoconvert", "!"]
-        # join=true(既定) なので、指定した interlace-mode だけが上書きされ、
-        # format/width/height/framerate は入力のまま引き継がれる。
-        return ["capssetter", "caps=video/x-raw,interlace-mode=progressive", "!",
-                "videoconvert", "!"]
+        return ["videoconvert", "!"]
+
+    def _telop_interlaced(self) -> bool:
+        """テロップを interleaved と名乗らせるか(入力と揃えるため)."""
+        return bool(self.interlace and not self.deinterlace)
 
     def _build_cmd_burnin(self):
-        # 入力映像 → (deinterlace もしくは progressive 名乗り) → compositor.sink_0
+        # 入力映像 → (そのまま1080i / 任意でdeinterlace) → compositor.sink_0
         vin = self._video_in(self._compositor_in() + ["comp.sink_0"])
         # テロップ(BGRA/α) → compositor.sink_1(アルファ合成で上に乗る)
-        telop = self._telop_src() + ["videoconvert", "!", "comp.sink_1"]
+        # 入力映像とインターレース指定を揃える(揃っていないと not-negotiated)
+        telop = (self._telop_src(self._telop_interlaced())
+                 + ["videoconvert", "!", "comp.sink_1"])
         # 合成 → 番組映像として焼き込み出力(keyer=off)
         comp = ["compositor", "name=comp", "background=black", "!", "videoconvert", "!"]
         if self.interlace:
@@ -418,10 +432,10 @@ class GstSubprocessBridge:
                                "REFケーブルと Desktop Video Setup の設定を確認してください"),
         ("in use", "DeckLink が他のアプリに使われています。Media Express / "
                    "プレビュー / もう一方の起動バッチを閉じてください"),
-        ("not-negotiated", "映像のキャプス交渉に失敗しました。インターレース"
-                           "(1080i)のまま compositor に入れようとしている可能性が"
-                           "あります。バッチの EXTRA から --keep-interlaced を外して"
-                           "ください(既定のデインターレース動作に戻ります)"),
+        ("not-negotiated", "映像のキャプス交渉に失敗しました。入力映像とテロップで"
+                           "インターレースの指定が食い違っている可能性があります。"
+                           "解消しない場合はバッチの EXTRA に --deinterlace を"
+                           "指定してみてください"),
         ("internal data stream error", "上流の要素が停止しました。直前の "
                                        "not-negotiated / エラー行を確認してください"),
         ("failed to connect to host", "gst から本体(Python)への localhost 接続が"

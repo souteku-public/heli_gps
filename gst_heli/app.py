@@ -423,7 +423,7 @@ def run(args):
             keyer=args.keyer, vconnection=args.vconnection, vmode=args.vmode,
             audio_port=args.audio_port, video_port=args.video_port,
             gst_bin=args.gst_bin, interlace=not args.no_interlace,
-            deinterlace=not getattr(args, 'keep_interlaced', False),
+            deinterlace=args.deinterlace,
             out_mode=args.output_mode, av_offset_ms=args.av_offset_ms,
             audio_only=getattr(args, "audio_only", False))
         try:
