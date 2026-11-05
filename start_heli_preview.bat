@@ -23,6 +23,7 @@ rem ----------------
 
 call :setup_path || goto :err_gst
 where python >nul 2>&1 || goto :err_py
+python -c "import numpy, PIL" >nul 2>&1 || goto :err_deps
 
 echo Starting preview (input video + super in a window)...
 start "HeliGPS Preview" cmd /k python -m gst_heli.preview ^
@@ -42,11 +43,39 @@ if exist "%GST2%\gst-launch-1.0.exe" ( set "PATH=%GST2%;%PATH%" & exit /b 0 )
 exit /b 1
 
 :err_gst
-echo [ERROR] GStreamer (gst-launch-1.0) not found. Install Complete and set GST1/GST2.
+echo.
+echo [ERROR] GStreamer (gst-launch-1.0) not found.
+echo.
+echo   Install the Windows (MSVC 64-bit) Runtime AND Development
+echo   installers from https://gstreamer.freedesktop.org/download/
+echo   Choose "Complete" - "Typical" does NOT include decklink.
+echo   If it is installed elsewhere, edit GST1/GST2 at the top of this file.
+echo.
+echo   Run  setup_check.bat  to see what is missing.
+echo.
+pause
+exit /b 1
+
+:err_deps
+echo.
+echo [ERROR] Required Python packages are missing (numpy / Pillow).
+echo.
+echo   Run this once on this PC:
+echo.
+echo       setup_check.bat
+echo.
+echo   (or:  python -m pip install -r requirements.txt )
+echo.
 pause
 exit /b 1
 
 :err_py
-echo [ERROR] python not found. Install Python and add it to PATH.
+echo.
+echo [ERROR] python not found.
+echo.
+echo   Install Python 3.10 or later from https://www.python.org/
+echo   IMPORTANT: tick "Add python.exe to PATH" in the installer.
+echo   Then run  setup_check.bat  once.
+echo.
 pause
 exit /b 1

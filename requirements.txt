@@ -1,2 +1,21 @@
-numpy>=1.24
-sounddevice>=0.4.6  # ライブ受信(GUI)に必要。WAVファイル復調だけなら不要
+# ヘリGPSスーパーシステム 依存パッケージ
+#
+#   導入:  python -m pip install -r requirements.txt
+#
+# ※ pip ではなく python -m pip を使ってください。
+#    複数の Python が入っている環境で、別の Python 側に入ってしまうのを防ぎます。
+
+# --- 必須(これが無いと起動しません) ---
+numpy>=1.24          # 信号処理(MSK復調)・フレーム合成
+Pillow>=10.0         # テロップ/地図の描画、フォント処理、配置プレビュー
+
+# --- 任意 ---
+# sounddevice は PC のサウンドデバイスから直接取り込む検証用ツール
+# (nnn_decoder/app.py) だけで使います。
+# SDI(DeckLink)から取り込む通常の運用では不要です。
+sounddevice>=0.4.6   # 任意: PCのマイク/ライン入力から復調する検証ツール用
+
+# --- インストール不要(Python に同梱) ---
+# tkinter … 制御UI。python.org のインストーラなら既定で入ります。
+#            「No module named 'tkinter'」が出る場合は Python を
+#            「Modify」→「tcl/tk and IDLE」にチェックを入れて入れ直してください。

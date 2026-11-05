@@ -6,6 +6,27 @@
 
 ---
 
+## ★ 新しいPCでの手順（まずこれだけ）
+
+順番が大事です。**1〜3を飛ばすと起動しません。**
+
+| | やること | 確認 |
+|---|---|---|
+| **1** | **Blackmagic Desktop Video** を入れて PC 再起動（§1） | Desktop Video Setup でデバイスが見える |
+| **2** | **GStreamer** を Runtime・Development とも **Complete** で入れる（§2） | ― |
+| **3** | **Python 3.10 以降**を入れる。インストーラで **Add python.exe to PATH に必ずチェック**（§3） | コマンドプロンプトで `python -V` |
+| **4** | 配布物を `C:\heli_gps` などに展開する（§4） | ― |
+| **5** | **`setup_check.bat` をダブルクリック**（これが依存パッケージの導入と確認をまとめてやります） | 「All good.」と出る |
+| **6** | `start_heli_preview.bat` で動作確認 → 本番は `start_heli_gst.bat` / `start_heli_burnin.bat`（§6） | ― |
+
+> ### `setup_check.bat` が全部やってくれます
+> `python -m pip install -r requirements.txt` を実行したうえで、
+> **Python / numpy / Pillow / tkinter / 同梱データ / 同梱フォント / GStreamer /
+> decklink プラグイン**を順に調べ、**足りないものと直し方を日本語で一覧表示**します。
+> 起動がうまくいかないときは、まずこれを実行してください。
+
+---
+
 ## 0. 事前に用意するもの
 
 | | 内容 |
@@ -49,12 +70,42 @@
 ## 3. Python の導入
 
 1. `https://www.python.org/` から **Python 3.10 以降** をインストール
-   （インストーラで **Add python.exe to PATH** に必ずチェック）
-2. 依存パッケージを導入:
+   - インストーラで **Add python.exe to PATH** に**必ずチェック**
+   - 「Customize installation」を選ぶ場合は **tcl/tk and IDLE** のチェックを外さないこと
+     （制御UIが tkinter を使います）
+2. **確認**（コマンドプロンプトで）:
 
 ```
-pip install -r requirements.txt
+python -V
 ```
+
+→ `Python 3.12.x` のようにバージョンが出れば OK。
+`'python' は認識されていません` と出る場合は PATH が通っていません。
+Python を入れ直すか、環境変数 PATH に追加してください。
+
+3. 依存パッケージを導入（**`setup_check.bat` を使えばこの手順は不要**）:
+
+```
+python -m pip install -r requirements.txt
+```
+
+> **`pip` ではなく `python -m pip` を使ってください。**
+> PC に複数の Python が入っていると、`pip` が別の Python 側に入れてしまい、
+> 「インストールしたのに No module named ... が出る」原因になります。
+
+**入るもの**
+
+| パッケージ | 用途 | 必須 |
+|---|---|---|
+| `numpy` | 信号処理（MSK復調）・フレーム合成 | **必須** |
+| `Pillow` | テロップ・地図の描画、フォント処理 | **必須** |
+| `sounddevice` | PCのマイク/ライン入力から復調する検証ツール用 | 任意 |
+
+> **インターネットに繋がらないPCの場合**
+> ネットに繋がる別PCで `python -m pip download -r requirements.txt -d wheels`
+> を実行し、`wheels` フォルダごと持ち込んでから
+> `python -m pip install --no-index --find-links wheels -r requirements.txt` を実行します。
+> 社内プロキシ経由なら、先に `set HTTPS_PROXY=http://プロキシ:ポート` を指定してください。
 
 ---
 
@@ -74,6 +125,9 @@ heli_gps\
 ├── docs\terms\              利用規約の取得時点スナップショット
 ├── THIRD_PARTY_NOTICES.md   出典・ライセンス一覧
 ├── TERMS_OF_USE.md          利用条件（系列局向け）
+├── requirements.txt         依存パッケージ一覧
+├── setup_check.bat          ★導入と確認（新しいPCではまずこれ）
+├── check_setup.py           導入チェック本体
 ├── start_heli_gst.bat       起動：Fill/Key 出し
 ├── start_heli_burnin.bat    起動：バーンイン（1本出し）
 └── start_heli_preview.bat   起動：プレビュー（SDI出力なし）
@@ -268,6 +322,11 @@ heli_gps\
 
 | 症状 | 原因・対処 |
 |---|---|
+| **`ModuleNotFoundError: No module named 'numpy'`**（または `'PIL'`） | **依存パッケージが未導入**。`setup_check.bat` をダブルクリックしてください。手動なら `python -m pip install -r requirements.txt` |
+| `No module named 'tkinter'` | Python のインストール時に tcl/tk が外れています。Python を「Modify」→ **tcl/tk and IDLE** にチェックを入れて入れ直す |
+| インストールしたのに `No module named ...` が消えない | PC に複数の Python があり、別の Python に入っています。**`pip` ではなく `python -m pip`** を使ってください。`python -c "import sys;print(sys.executable)"` でどの Python が動いているか確認できます |
+| `'python' は認識されていません` | Python 未導入か PATH 未設定。インストーラで **Add python.exe to PATH** にチェックして入れ直す |
+| 黒い画面が一瞬で消えて読めない | `setup_check.bat` を実行してください（結果が残ります）。起動バッチのエラーも `pause` で止まるようにしてあります |
 | 使いたいフォントが一覧に無い | 後入れフォント（市販フォント等）は既定で非表示。「その他のフォントも表示（EULA要確認）」にチェック。**使用前にEULAの確認を** |
 | 時刻がずれている | 送出PCの時計そのものです。**局内NTP／GPS時刻サーバへ同期**してください（§6） |
 | `'gst-launch-1.0' は認識されていません` | GStreamer 未導入か PATH 未設定。バッチの `GST1`/`GST2` を実環境に合わせる |
