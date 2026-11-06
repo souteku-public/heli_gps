@@ -28,12 +28,17 @@ class HeliConfig:
     # 住所の見せ方。既定は従来どおり「千葉県鴨川市上空」。
     #   drop_pref_suffix/drop_muni_suffix/addr_sep を組み合わせると
     #   「千葉・鴨川上空」のような表記にできる。
-    drop_pref_suffix: bool = False   # 「千葉県」→「千葉」
-    drop_muni_suffix: bool = False   # 「鴨川市」→「鴨川」
-    addr_sep: str = ""               # 都道府県と市区町村の区切り("・"など)
+    # 既定は「千葉・鴨川上空」。従来形(千葉県鴨川市上空)に戻すには
+    # drop_* を False、addr_sep を "" にする。
+    drop_pref_suffix: bool = True    # 「千葉県」→「千葉」
+    drop_muni_suffix: bool = True    # 「鴨川市」→「鴨川」
+    addr_sep: str = "・"             # 都道府県と市区町村の区切り
     offshore_suffix: str = "沖"      # 海上のときに付ける語("沖"/"沿岸"/空=なし)
     addr_suffix: str = "上空"        # 末尾に付ける語
     addr_suffix_on: bool = True      # 末尾の語を付けるか
+    # 海上(沖/沿岸)のときは末尾の語を付けない。
+    # 「茨城・鹿嶋沿岸上空」→「茨城・鹿嶋沿岸」のように重複を避ける。
+    offshore_drop_suffix: bool = False
     text_format: str = "{address}{suffix}"
     stale_text: str = ""        # 受信途絶時の表示(空=消す)
     stale_timeout: float = 5.0  # これを超えたら「受信中」ではないと判定
@@ -90,12 +95,19 @@ class HeliDecoder:
                          drop_muni_suffix=c.drop_muni_suffix,
                          sep=c.addr_sep)
 
+    def _is_offshore(self) -> bool:
+        a = self._geo.current
+        return bool(a and a.offshore)
+
     def _format(self, pkt) -> str:
         addr_s = self.address_text()
         if not addr_s:
             return ""
         c = self.cfg
         suffix = c.addr_suffix if c.addr_suffix_on else ""
+        # 海上では「沖」「沿岸」が既に付いているので、末尾の語を外せる
+        if suffix and c.offshore_drop_suffix and self._is_offshore():
+            suffix = ""
         try:
             return c.text_format.format(
                 address=addr_s,

@@ -51,14 +51,17 @@ def test_list_fonts_hides_other_by_default():
 # ---------------- レイヤの組み立て ----------------
 
 def test_build_layers_respects_on_flags():
+    # 既定は3項目とも表示、局名は「日本テレビ」
     ls = LayerSet()
-    assert [l.key for l in build_layers(ls, "東京都港区上空")] == ["addr"]
+    assert ls.station_text == "日本テレビ"
+    assert [l.key for l in build_layers(ls, "東京・港上空")] == \
+        ["addr", "clock", "station"]
+    ls.clock_on = False
+    ls.station_on = False
+    assert [l.key for l in build_layers(ls, "東京・港上空")] == ["addr"]
+    # 空文字のレイヤは出さない
     ls.clock_on = True
     ls.station_on = True
-    ls.station_text = "日本テレビ"
-    assert [l.key for l in build_layers(ls, "東京都港区上空")] == \
-        ["addr", "clock", "station"]
-    # 空文字のレイヤは出さない
     ls.station_text = ""
     assert [l.key for l in build_layers(ls, "")] == ["clock"]
 
@@ -300,16 +303,21 @@ def test_decoder_text_format_and_suffix():
     d._geo = SimpleNamespace(current=_addr("千葉県", "鴨川市"))
     pkt = SimpleNamespace(alt_m=300.0, lat_wgs84=35.1, lon_wgs84=140.1,
                           satellites=8)
-    assert d._format(pkt) == "千葉県鴨川市上空"
+    # 既定は短縮形
+    assert d._format(pkt) == "千葉・鴨川上空"
     cfg.addr_suffix_on = False
-    assert d._format(pkt) == "千葉県鴨川市"
+    assert d._format(pkt) == "千葉・鴨川"
     cfg.addr_suffix_on = True
+    # 従来形(接尾辞あり・区切りなし)にも戻せること
+    cfg.drop_pref_suffix = cfg.drop_muni_suffix = False
+    cfg.addr_sep = ""
+    assert d._format(pkt) == "千葉県鴨川市上空"
     cfg.drop_pref_suffix = cfg.drop_muni_suffix = True
     cfg.addr_sep = "・"
-    assert d._format(pkt) == "千葉・鴨川上空"
     cfg.addr_suffix = "付近"
     assert d._format(pkt) == "千葉・鴨川付近"
     # 旧形式の書式文字列でも落ちないこと(後方互換)
+    cfg.addr_suffix = "上空"
     cfg.text_format = "{address}上空"
     assert d._format(pkt) == "千葉・鴨川上空"
 
@@ -513,3 +521,82 @@ def test_burnin_pipeline_actually_negotiates(tmp_path, deinterlace):
     out = r.stdout + r.stderr
     assert "not-negotiated" not in out, out[-800:]
     assert "ERROR" not in out, out[-800:]
+
+
+# ---------------- 今回の既定値と地図スーパーの撤去 ----------------
+
+def test_defaults_are_the_short_address_style():
+    """既定は「千葉・鴨川上空」(県・市を省き、中黒でつなぎ、末尾に上空)."""
+    from gst_heli.decoder_core import HeliConfig
+    c = HeliConfig(fs=48000, baud=1200, channel=0)
+    assert c.drop_pref_suffix is True
+    assert c.drop_muni_suffix is True
+    assert c.addr_sep == "・"
+    assert c.addr_suffix == "上空" and c.addr_suffix_on is True
+    assert c.offshore_drop_suffix is False     # 海上の末尾除去は既定OFF
+
+
+def test_offshore_drop_suffix_only_affects_offshore():
+    from types import SimpleNamespace
+    from gst_heli.decoder_core import HeliConfig, HeliDecoder
+    pkt = SimpleNamespace(alt_m=300.0, lat_wgs84=35.1, lon_wgs84=140.1,
+                          satellites=8)
+
+    def fmt(addr, **kw):
+        cfg = HeliConfig(fs=48000, baud=1200, channel=0, **kw)
+        d = HeliDecoder.__new__(HeliDecoder)
+        d.cfg = cfg
+        d._geo = SimpleNamespace(current=addr)
+        return d._format(pkt)
+
+    land = _addr("千葉県", "鴨川市")
+    sea = _addr("茨城県", "鹿嶋市", offshore=True)
+    # OFF(既定): 海上にも末尾が付く
+    assert fmt(sea) == "茨城・鹿嶋沖上空"
+    # ON: 海上のときだけ末尾が消える。陸上は変わらない。
+    assert fmt(sea, offshore_drop_suffix=True) == "茨城・鹿嶋沖"
+    assert fmt(land, offshore_drop_suffix=True) == "千葉・鴨川上空"
+    # 「沿岸」でも同じ
+    assert fmt(sea, offshore_suffix="沿岸",
+               offshore_drop_suffix=True) == "茨城・鹿嶋沿岸"
+
+
+def test_station_name_default():
+    ls = LayerSet()
+    assert ls.station_text == "日本テレビ"
+    assert ls.station_on is True
+
+
+def test_layers_default_to_a_vertical_stack():
+    """既定は3項目とも同じ位置・同じ文字サイズ・同じ色で縦並び."""
+    ls = LayerSet()
+    styles = [ls.style(k) for k in ("addr", "clock", "station")]
+    assert len({s.font_size for s in styles}) == 1
+    assert len({s.color for s in styles}) == 1
+    assert len({s.margin_x for s in styles}) == 1
+    ys = [s.margin_y for s in styles]
+    assert ys == sorted(ys) and len(set(ys)) == 3
+    # 下端セーフエリア(1080*0.95=1026)に収まること
+    r = SuperRenderer(1920, 1080, SuperStyle())
+    boxes = [r.layer_bbox(l) for l in build_layers(ls, "千葉・鴨川上空")]
+    assert all(b[3] < 1026 for b in boxes), boxes
+    for a, b in zip(boxes, boxes[1:]):
+        assert a[3] < b[1], f"行が重なっている: {a} {b}"
+
+
+def test_map_super_is_gone_from_the_broadcast_path():
+    """地図を放送映像に重ねる経路が存在しないこと(絶対に乗せない)."""
+    import inspect
+    from gst_heli import app
+    src = inspect.getsource(app)
+    for token in ("map_compose", "MapStyle", "MapRenderer", "mstyle", "map_on"):
+        assert token not in src, f"app.py に {token} が残っている"
+
+
+def test_map_osc_messages_are_ignored():
+    """古いUIから Map* が届いても何も起きないこと."""
+    c, cfg, ls = _ctrl()
+    before = (ls.addr.margin_x, ls.addr.font_size, cfg.addr_level)
+    for name in ("Mapon", "Mapx", "Mapy", "Mapw", "Maph", "Mapspan", "Maptrail"):
+        c._apply(name, 1)
+    assert (ls.addr.margin_x, ls.addr.font_size, cfg.addr_level) == before

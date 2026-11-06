@@ -44,8 +44,10 @@ def test_decoder_core_end_to_end():
         assert st["lat"] is not None
         text = dec.current_text()
         assert text.endswith("上空")
-        # 都道府県のいずれかの接尾辞を含む(この座標はWGS84で東京都千代田区)
-        assert any(suf in text for suf in ("都", "道", "府", "県"))
+        # 既定は接尾辞を省いた短縮形(例「東京・千代田上空」)。
+        # 区切りの「・」が入り、都道府県の接尾辞は落ちている。
+        assert "・" in text
+        assert not any(f"{suf}・" in text for suf in ("都", "道", "府", "県"))
     finally:
         dec.close()
 

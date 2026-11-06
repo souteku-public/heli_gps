@@ -28,8 +28,6 @@ import numpy as np
 from nnn_decoder.osc import OscSender, osc_parse
 
 from .decoder_core import HeliConfig, HeliDecoder
-from .map_render import MapRenderer, MapStyle
-from .map_render import compose as map_compose
 from .renderer import (CLOCK_DATES, LAYER_KEYS, LayerSet, SuperRenderer,
                        SuperStyle, build_layers, clock_text, stack_vertically)
 
@@ -48,11 +46,10 @@ class OscControl:
     _LAYER_PREFIX = (("Station", "station"), ("Clock", "clock"), ("Super", "addr"))
 
     def __init__(self, cfg: HeliConfig, style: SuperStyle, port: int = 9001,
-                 on_change=None, mstyle=None, layers: LayerSet | None = None):
+                 on_change=None, layers: LayerSet | None = None):
         self.cfg = cfg
         self.style = style          # 住所レイヤ(= layers.addr と同一オブジェクト)
         self.layers = layers        # LayerSet(時刻・局名を含む). Noneなら住所のみ
-        self.mstyle = mstyle        # MapStyle(地図スーパー). Noneなら地図制御は無効
         # 見た目・住所設定が変わったら呼ぶ(描画キャッシュ破棄の合図)。
         # これが無いと、文字列が変わるまで新しい見た目が反映されない。
         self.on_change = on_change
@@ -142,6 +139,9 @@ class OscControl:
         if name == "Addrsuffixon":           # 末尾の語を付けるか
             c.addr_suffix_on = bool(int(float(val)))
             return
+        if name == "Addroffshoredrop":       # 海上では末尾の語を付けない
+            c.offshore_drop_suffix = bool(int(float(val)))
+            return
         if name == "Textformat":
             c.text_format = val or "{address}{suffix}"
             return
@@ -168,23 +168,11 @@ class OscControl:
             if name == "Stationtext":
                 ls.station_text = val or ""
                 return
-        # ---- 地図スーパー(選択制) ----
-        if name.startswith("Map") and self.mstyle is not None:
-            m = self.mstyle
-            if name == "Mapon":
-                m.on = bool(int(float(val)))
-            elif name == "Mapx":
-                m.x = int(float(val))
-            elif name == "Mapy":
-                m.y = int(float(val))
-            elif name == "Mapw":
-                m.w = max(80, int(float(val)))
-            elif name == "Maph":
-                m.h = max(60, int(float(val)))
-            elif name == "Mapspan":
-                m.span = max(0.02, min(3.0, float(val)))
-            elif name == "Maptrail":
-                m.trail = bool(int(float(val)))
+        # ---- 地図スーパーは廃止 ----
+        # 地図を放送映像に重ねる経路は**存在しません**。古いUIから Map* が
+        # 届いても何もしない(誤って映像に出さないため)。
+        # PC画面で位置を見るには control_ui の「地図」ボタンを使う。
+        if name.startswith("Map"):
             return
         # ---- レイヤ別の見た目(接頭辞つき) ----
         for prefix, layer in self._LAYER_PREFIX:
@@ -300,75 +288,35 @@ def make_engine(args):
     # 住所・時刻・局名の3レイヤ。住所レイヤは style と同一オブジェクトにして、
     # 接頭辞なしの旧OSC名(Fontsize 等)がそのまま住所に効くようにする。
     layers = LayerSet(addr=style)
-    layers.clock_on = getattr(args, "clock", "off") != "off"
-    if layers.clock_on:
-        layers.clock_format = args.clock
+    clock = getattr(args, "clock", "")
+    if clock:                              # 未指定なら LayerSet の既定のまま
+        layers.clock_on = clock != "off"
+        if layers.clock_on:
+            layers.clock_format = clock
     layers.clock_date = getattr(args, "clock_date", "off")
-    layers.station_text = getattr(args, "station_text", "") or ""
-    layers.station_on = bool(layers.station_text)
+    station = getattr(args, "station_text", None)
+    if station is not None:                # 未指定なら既定("日本テレビ")のまま
+        layers.station_text = station
+        layers.station_on = bool(station)
     decoder = HeliDecoder(cfg)
     renderer = SuperRenderer(args.width, args.height, style)
     status = StatusSender(args.status_host, args.status_port)
     blank = np.zeros((args.height, args.width, 4), np.uint8)
-    mstyle = MapStyle(on=bool(getattr(args, "map_on", False)))
-    # 住所判定が読み込んだ境界データを再利用(二重読み込み・初回停止を回避)
-    maprend = MapRenderer(decoder.boundary_lookup())
     cache = {"sig": None, "telop": blank, "frame": blank,
-             "text": None, "style_ver": 0,
-             "map_img": None, "map_key": None, "trail": []}
-
-    def _prewarm_map():
-        # 地図をONにした瞬間に描画が数十ms止まらないよう、
-        # フォント読み込み等をバックグラウンドで温めておく。
-        try:
-            maprend.render(35.6, 139.7, MapStyle(w=mstyle.w, h=mstyle.h,
-                                                 span=mstyle.span), None)
-        except Exception:
-            pass
-    threading.Thread(target=_prewarm_map, daemon=True).start()
+             "text": None, "style_ver": 0}
 
     def mark_dirty():
-        # 見た目/住所/地図の設定が変わった。次フレームで再描画。
+        # 見た目/住所の設定が変わった。次フレームで再描画。
         cache["style_ver"] += 1
 
     ctrl = (OscControl(cfg, style, args.ctrl_port, on_change=mark_dirty,
-                       mstyle=mstyle, layers=layers)
+                       layers=layers)
             if args.osc_control else None)
 
-    def _update_map(ver) -> bool:
-        """地図インセットを必要なら再描画。再描画したら True."""
-        if not mstyle.on:
-            if cache["map_img"] is not None:
-                cache["map_img"] = cache["map_key"] = None
-                return True
-            return False
-        st = decoder.status()
-        lat, lon = st["lat"], st["lon"]
-        if lat is None:
-            if cache["map_img"] is not None:
-                cache["map_img"] = cache["map_key"] = None
-                return True
-            return False
-        # 軌跡(一定距離動いたら点を足す)
-        tr = cache["trail"]
-        if not tr or (abs(tr[-1][0] - lon) + abs(tr[-1][1] - lat)) > 0.0005:
-            tr.append((lon, lat))
-            if len(tr) > 600:
-                del tr[:-600]
-        # 位置を約1px相当に量子化し、無駄な再描画(1枚10ms超)を避ける
-        q = max(1e-6, mstyle.span / 400.0)
-        key = (round(lon / q), round(lat / q), mstyle.w, mstyle.h,
-               round(mstyle.span, 5), mstyle.trail, len(tr) // 5, ver)
-        if key == cache["map_key"]:
-            return False
-        cache["map_key"] = key
-        cache["map_img"] = maprend.render(lat, lon, mstyle, tr)
-        return True
-
     def current_frame():
+        """放送に出すフレーム。**文字レイヤだけ**で、地図は一切合成しない."""
         text = decoder.current_text()
         ver = cache["style_ver"]
-        dirty = False
         # 「どのレイヤに何が出ているか」+ 見た目バージョン を合図に再描画する。
         # 見た目バージョンが無いと「決定」を押しても文字が変わるまで反映されない。
         # 時刻は毎秒(分表示なら毎分)ここで文字列が変わる。
@@ -378,21 +326,14 @@ def make_engine(args):
             cache["sig"] = sig
             cache["text"] = text
             # レイヤ単位でキャッシュしているので、変わったレイヤだけ描き直される
-            cache["telop"] = renderer.render_layers(lays)
-            dirty = True
-        if _update_map(ver):
-            dirty = True
-        if dirty:
-            cache["frame"] = (map_compose(cache["telop"], cache["map_img"],
-                                          mstyle.x, mstyle.y)
-                              if cache["map_img"] is not None else cache["telop"])
+            cache["frame"] = renderer.render_layers(lays)
         # 位置・状態は受信中は定期的に送る(StatusSender側で間引き)。
         # 住所文字が安定しても control_ui が途絶表示にならないようにするため。
         status.send(decoder, text)
         return cache["frame"]
 
-    return dict(cfg=cfg, style=style, layers=layers, mstyle=mstyle,
-                decoder=decoder, renderer=renderer, maprend=maprend,
+    return dict(cfg=cfg, style=style, layers=layers,
+                decoder=decoder, renderer=renderer,
                 status=status, ctrl=ctrl, cache=cache,
                 current_frame=current_frame)
 
@@ -561,25 +502,23 @@ def build_parser():
     ap.add_argument("--geo-mode", default="offline", choices=["offline", "auto", "online"])
     ap.add_argument("--addr-level", default="muni",
                     choices=["pref", "muni", "city", "citygun", "town"])
-    ap.add_argument("--map-on", action="store_true",
-                    help="地図スーパーを最初からONにする(既定OFF。UIで切替可)")
     ap.add_argument("--datum", default="wgs84", choices=["wgs84", "tokyo"],
                     help="NNN座標の測地系。wgs84=変換なし(既定) / tokyo=WGS84へ変換")
     ap.add_argument("--font-size", type=int, default=72)
-    ap.add_argument("--clock", default="off", choices=["off", "hm", "hms"],
+    ap.add_argument("--clock", default="", choices=["", "off", "hm", "hms"],
                     help="時刻スーパー: off=出さない(既定) / hm=分まで / hms=秒まで。"
                          "時刻は送出PCの時計。放送に出すならNTP同期必須")
     ap.add_argument("--clock-date", default="off",
                     choices=["off", "slash", "kanji"],
                     help="時刻に日付を付ける: off(既定) / slash=11/4 / kanji=11月4日")
-    ap.add_argument("--addr-style", default="full",
+    ap.add_argument("--addr-style", default="short",
                     choices=["full", "short"],
-                    help="full=「千葉県鴨川市上空」(既定) / "
-                         "short=「千葉・鴨川上空」(都道府県・市区町村の接尾辞を省く)")
+                    help="short=「千葉・鴨川上空」(既定) / "
+                         "full=「千葉県鴨川市上空」(接尾辞を省かない)")
     ap.add_argument("--no-addr-suffix", action="store_true",
                     help="末尾の「上空」を付けない")
-    ap.add_argument("--station-text", default="",
-                    help="局名スーパーの文字列(空=出さない)")
+    ap.add_argument("--station-text", default=None,
+                    help="局名スーパーの文字列(空文字=出さない。未指定=既定のまま)")
     ap.add_argument("--stale-timeout", type=float, default=5.0,
                     help="この秒数を超えたら『受信中』でないと判定")
     ap.add_argument("--hold-timeout", type=float, default=15.0,

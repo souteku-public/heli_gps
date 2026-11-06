@@ -119,13 +119,13 @@ class LayerSet:
         default_factory=lambda: SuperStyle(margin_y=DEFAULT_TOP + DEFAULT_PITCH))
     station: SuperStyle = field(
         default_factory=lambda: SuperStyle(margin_y=DEFAULT_TOP + DEFAULT_PITCH * 2))
+    # 既定は3項目とも表示(左下に縦並び)。
     addr_on: bool = True
-    # 時刻・局名は**既定OFF**。明示的にONにしたときだけ放送に出る。
-    clock_on: bool = False
-    station_on: bool = False
+    clock_on: bool = True
+    station_on: bool = True
     clock_format: str = "hm"             # "hm"(分まで) / "hms"(秒まで)
     clock_date: str = "off"              # "off" / "slash"(11/4) / "kanji"(11月4日)
-    station_text: str = ""
+    station_text: str = "日本テレビ"
 
     def style(self, key: str) -> SuperStyle:
         return getattr(self, key)
