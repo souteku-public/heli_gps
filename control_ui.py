@@ -140,8 +140,8 @@ LAYER_DEFAULTS = {
     "station": _layer_default(2, text="日本テレビ"),
 }
 
-# 住所の見せ方。既定は「千葉・鴨川上空」。
-ADDR_DEFAULTS = dict(level="muni", droppref=True, dropmuni=True, sep="・",
+# 住所の見せ方。既定は「千葉・鴨川市上空」(市区町村の接尾辞は残す)。
+ADDR_DEFAULTS = dict(level="muni", droppref=True, dropmuni=False, sep="・",
                      offshore="沖", suffix="上空", suffixon=True,
                      offshoredrop=False)
 

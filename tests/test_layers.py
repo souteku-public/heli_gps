@@ -303,23 +303,27 @@ def test_decoder_text_format_and_suffix():
     d._geo = SimpleNamespace(current=_addr("千葉県", "鴨川市"))
     pkt = SimpleNamespace(alt_m=300.0, lat_wgs84=35.1, lon_wgs84=140.1,
                           satellites=8)
-    # 既定は短縮形
-    assert d._format(pkt) == "千葉・鴨川上空"
+    # 既定: 都道府県の接尾辞だけ省き、市区町村の接尾辞は残す
+    assert d._format(pkt) == "千葉・鴨川市上空"
     cfg.addr_suffix_on = False
-    assert d._format(pkt) == "千葉・鴨川"
+    assert d._format(pkt) == "千葉・鴨川市"
     cfg.addr_suffix_on = True
+    # 市区町村の接尾辞も省く設定
+    cfg.drop_muni_suffix = True
+    assert d._format(pkt) == "千葉・鴨川上空"
+    cfg.drop_muni_suffix = False
     # 従来形(接尾辞あり・区切りなし)にも戻せること
-    cfg.drop_pref_suffix = cfg.drop_muni_suffix = False
+    cfg.drop_pref_suffix = False
     cfg.addr_sep = ""
     assert d._format(pkt) == "千葉県鴨川市上空"
-    cfg.drop_pref_suffix = cfg.drop_muni_suffix = True
+    cfg.drop_pref_suffix = True
     cfg.addr_sep = "・"
     cfg.addr_suffix = "付近"
-    assert d._format(pkt) == "千葉・鴨川付近"
+    assert d._format(pkt) == "千葉・鴨川市付近"
     # 旧形式の書式文字列でも落ちないこと(後方互換)
     cfg.addr_suffix = "上空"
     cfg.text_format = "{address}上空"
-    assert d._format(pkt) == "千葉・鴨川上空"
+    assert d._format(pkt) == "千葉・鴨川市上空"
 
 
 def test_address_osc_controls():
@@ -526,11 +530,14 @@ def test_burnin_pipeline_actually_negotiates(tmp_path, deinterlace):
 # ---------------- 今回の既定値と地図スーパーの撤去 ----------------
 
 def test_defaults_are_the_short_address_style():
-    """既定は「千葉・鴨川上空」(県・市を省き、中黒でつなぎ、末尾に上空)."""
+    """既定は「千葉・鴨川市上空」.
+
+    都道府県の接尾辞(県・都・府)は省くが、**市区町村の接尾辞は残す**。
+    """
     from gst_heli.decoder_core import HeliConfig
     c = HeliConfig(fs=48000, baud=1200, channel=0)
     assert c.drop_pref_suffix is True
-    assert c.drop_muni_suffix is True
+    assert c.drop_muni_suffix is False
     assert c.addr_sep == "・"
     assert c.addr_suffix == "上空" and c.addr_suffix_on is True
     assert c.offshore_drop_suffix is False     # 海上の末尾除去は既定OFF
@@ -552,13 +559,13 @@ def test_offshore_drop_suffix_only_affects_offshore():
     land = _addr("千葉県", "鴨川市")
     sea = _addr("茨城県", "鹿嶋市", offshore=True)
     # OFF(既定): 海上にも末尾が付く
-    assert fmt(sea) == "茨城・鹿嶋沖上空"
+    assert fmt(sea) == "茨城・鹿嶋市沖上空"
     # ON: 海上のときだけ末尾が消える。陸上は変わらない。
-    assert fmt(sea, offshore_drop_suffix=True) == "茨城・鹿嶋沖"
-    assert fmt(land, offshore_drop_suffix=True) == "千葉・鴨川上空"
+    assert fmt(sea, offshore_drop_suffix=True) == "茨城・鹿嶋市沖"
+    assert fmt(land, offshore_drop_suffix=True) == "千葉・鴨川市上空"
     # 「沿岸」でも同じ
     assert fmt(sea, offshore_suffix="沿岸",
-               offshore_drop_suffix=True) == "茨城・鹿嶋沿岸"
+               offshore_drop_suffix=True) == "茨城・鹿嶋市沿岸"
 
 
 def test_station_name_default():

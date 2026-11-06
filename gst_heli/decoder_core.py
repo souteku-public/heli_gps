@@ -28,10 +28,12 @@ class HeliConfig:
     # 住所の見せ方。既定は従来どおり「千葉県鴨川市上空」。
     #   drop_pref_suffix/drop_muni_suffix/addr_sep を組み合わせると
     #   「千葉・鴨川上空」のような表記にできる。
-    # 既定は「千葉・鴨川上空」。従来形(千葉県鴨川市上空)に戻すには
-    # drop_* を False、addr_sep を "" にする。
+    # 既定は「千葉・鴨川市上空」。
+    #   都道府県の接尾辞は省くが、市区町村の接尾辞は**残す**。
+    # 従来形(千葉県鴨川市上空)に戻すには drop_pref_suffix を False、
+    # addr_sep を "" にする。
     drop_pref_suffix: bool = True    # 「千葉県」→「千葉」
-    drop_muni_suffix: bool = True    # 「鴨川市」→「鴨川」
+    drop_muni_suffix: bool = False   # 「鴨川市」→「鴨川」(既定は省かない)
     addr_sep: str = "・"             # 都道府県と市区町村の区切り
     offshore_suffix: str = "沖"      # 海上のときに付ける語("沖"/"沿岸"/空=なし)
     addr_suffix: str = "上空"        # 末尾に付ける語

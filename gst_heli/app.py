@@ -281,7 +281,7 @@ def make_engine(args):
                      datum=getattr(args, "datum", "wgs84"),
                      stale_timeout=getattr(args, "stale_timeout", 5.0),
                      hold_timeout=getattr(args, "hold_timeout", 15.0),
-                     drop_pref_suffix=short, drop_muni_suffix=short,
+                     drop_pref_suffix=short, drop_muni_suffix=False,
                      addr_sep="・" if short else "",
                      addr_suffix_on=not getattr(args, "no_addr_suffix", False))
     style = SuperStyle(font_size=args.font_size)
@@ -513,8 +513,8 @@ def build_parser():
                     help="時刻に日付を付ける: off(既定) / slash=11/4 / kanji=11月4日")
     ap.add_argument("--addr-style", default="short",
                     choices=["full", "short"],
-                    help="short=「千葉・鴨川上空」(既定) / "
-                         "full=「千葉県鴨川市上空」(接尾辞を省かない)")
+                    help="short=「千葉・鴨川市上空」(既定。都道府県の接尾辞だけ省く) / "
+                         "full=「千葉県鴨川市上空」(省かない)")
     ap.add_argument("--no-addr-suffix", action="store_true",
                     help="末尾の「上空」を付けない")
     ap.add_argument("--station-text", default=None,
