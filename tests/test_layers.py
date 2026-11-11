@@ -527,6 +527,174 @@ def test_burnin_pipeline_actually_negotiates(tmp_path, deinterlace):
     assert "ERROR" not in out, out[-800:]
 
 
+# ---------------- バーンインの色を変えないこと ----------------
+
+def test_burnin_pins_an_alpha_yuv_compositor_format():
+    """compositor の出力フォーマットを必ず固定すること.
+
+    指定しないと BGRA / colorimetry 不明で交渉され、入力(UYVY/bt709,
+    限定レンジ)が RGB を経由して戻されるため、テロップの無い素通し部分まで
+    色が変わる(実測で白が 253→235 に切り詰められた)。
+    アルファ合成が要るので、YUV かつアルファを持つ形式でなければならない。
+    """
+    from gst_heli.gst_subprocess import GstSubprocessBridge
+    cmd = _burnin_cmd()
+    comp = cmd[cmd.index("compositor"):]
+    fmt = comp.split("video/x-raw,format=")[1].split()[0]
+    assert fmt in ("A422", "AYUV"), f"色を保てない合成フォーマット: {fmt}"
+    # アルファ無しの形式は真っ黒になるので、取り違えを防ぐ
+    assert fmt not in ("UYVY", "Y42B", "I422", "NV16")
+
+
+def test_comp_format_auto_prefers_a422_but_falls_back():
+    """auto は A422 を使い、無い環境では AYUV に落ちること."""
+    from gst_heli.gst_subprocess import GstSubprocessBridge
+
+    def resolved(has_a422):
+        b = GstSubprocessBridge(lambda: None, lambda a, n: None,
+                                out_mode="burnin", gst_bin="gst-launch-1.0",
+                                on_log=lambda s: None)
+        b._has_format = lambda f, ok=has_a422: ok and f == "A422"
+        first = b._resolve_comp_format()
+        # 判定は1回だけ(毎回 gst を起動しない)
+        b._has_format = lambda f: pytest.fail("判定を繰り返している")
+        assert b._resolve_comp_format() == first
+        return first
+
+    assert resolved(True) == "A422"
+    assert resolved(False) == "AYUV"         # 古い GStreamer を想定
+
+
+def test_comp_format_can_be_overridden():
+    """明示指定した場合はそれを使い、空なら従来どおり指定しない."""
+    assert "video/x-raw,format=AYUV" in _burnin_cmd(comp_format="AYUV")
+    assert "video/x-raw,format=" not in \
+        _burnin_cmd(comp_format="").split("compositor")[1]
+
+
+def test_fillkey_output_is_untouched_by_the_compositor_fix():
+    """Fill&Key 側は compositor を通らないので影響を受けないこと."""
+    from gst_heli.gst_subprocess import GstSubprocessBridge
+    b = GstSubprocessBridge(lambda: None, lambda a, n: None, out_mode="fillkey",
+                            gst_bin="gst-launch-1.0")
+    cmd = " ".join(b._build_cmd())
+    assert "compositor" not in cmd
+    assert "video-format=8bit-bgra" in cmd     # Key(アルファ)を保つため
+
+
+# ---------------- 映像送出の負荷(カクつき対策) ----------------
+
+def _bridge_for_bgra(w=64, h=32):
+    from gst_heli.gst_subprocess import GstSubprocessBridge
+    return GstSubprocessBridge(lambda: None, lambda a, n: None,
+                               width=w, height=h, gst_bin="gst-launch-1.0")
+
+
+def test_to_bgra_matches_the_straightforward_conversion():
+    """最適化しても RGBA→BGRA の結果が変わらないこと."""
+    rng = np.random.default_rng(0)
+    b = _bridge_for_bgra()
+    for _ in range(3):
+        f = rng.integers(0, 256, (32, 64, 4), dtype=np.uint8)
+        want = np.ascontiguousarray(f[:, :, [2, 1, 0, 3]]).tobytes()
+        assert b._to_bgra(f) == want
+
+
+def test_to_bgra_reuses_the_result_for_the_same_frame():
+    """同じフレームなら変換をやり直さないこと.
+
+    1920x1080 の変換は約17ms で、29.97fps の猶予 33.4ms の半分を占める。
+    毎フレームやると制御UIを立ち上げたときに送出が間に合わず、映像が
+    カクつく原因になっていた(UIを閉じると直る、という症状)。
+    current_frame() は中身が変わらない限り同じ配列を返すので、
+    オブジェクトの同一性だけ見れば再変換を省ける。
+    """
+    b = _bridge_for_bgra()
+    f = np.zeros((32, 64, 4), np.uint8)
+    first = b._to_bgra(f)
+    assert b._to_bgra(f) is first, "同じフレームなのに作り直している"
+
+
+def test_to_bgra_reconverts_when_the_frame_changes():
+    """別のフレームが来たら必ず変換し直すこと(古い画が残らない)."""
+    b = _bridge_for_bgra()
+    a = np.zeros((32, 64, 4), np.uint8)
+    c = np.full((32, 64, 4), 200, np.uint8)
+    first = b._to_bgra(a)
+    assert b._to_bgra(c) != first
+    # 元のフレームに戻したときも正しい結果になること
+    assert b._to_bgra(a) == first
+
+
+def test_renderer_returns_a_new_array_each_time_it_redraws():
+    """送出側の同一性キャッシュが成り立つ前提を固定する.
+
+    render_layers がバッファを使い回すようになると、中身が変わったのに
+    同じオブジェクトが返り、古いテロップが出続けてしまう。
+    """
+    from gst_heli.renderer import SuperRenderer, SuperStyle, Layer
+    st = SuperStyle(font_size=24)
+    r = SuperRenderer(320, 180, st)
+    a = r.render_layers([Layer("addr", "あ", st)])
+    b = r.render_layers([Layer("addr", "い", st)])
+    assert a is not b
+
+
+# ---------------- 取扱説明書に書いた動作 ----------------
+
+def test_stale_text_appears_20s_after_signal_is_lost():
+    """受信途絶から約20秒で「受信途絶時の表示」に切り替わること.
+
+    取扱説明書(docs/USER_MANUAL.md)にこの20秒を明記しているので、
+    既定値を動かしたらここで気づけるようにしておく。
+      5秒  = 受信中ではないと判定(ランプが赤に)
+      +15秒 = 直前スーパーの保持(瞬断でテロップが消えないように)
+    """
+    import threading
+    from types import SimpleNamespace
+    from gst_heli import decoder_core as dc
+
+    clock = {"t": 1000.0}
+    orig = dc.time
+    dc.time = SimpleNamespace(monotonic=lambda: clock["t"])
+    try:
+        cfg = dc.HeliConfig(fs=48000, baud=1200, channel=2,
+                            stale_text="＜GPS受信なし＞")
+        assert cfg.stale_timeout + cfg.hold_timeout == 20.0
+
+        d = dc.HeliDecoder.__new__(dc.HeliDecoder)
+        d.cfg = cfg
+        d._lock = threading.Lock()
+        d._held_text, d._held_time = "", 0.0
+        d._geo = SimpleNamespace(current=SimpleNamespace(
+            text=lambda *a, **k: "千葉・鴨川市", offshore=False))
+        d._last_pkt = SimpleNamespace(alt_m=300.0, lat_wgs84=35.1,
+                                      lon_wgs84=140.1, satellites=8)
+        d._last_time = clock["t"]
+
+        switched = None
+        for i in range(0, 300):                 # 0.1秒刻みで30秒ぶん
+            clock["t"] = 1000.0 + i * 0.1
+            if d.current_text() == cfg.stale_text:
+                switched = i * 0.1
+                break
+        assert switched is not None, "いつまでも切り替わらない"
+        assert 19.5 <= switched <= 20.5, f"切替が {switched} 秒(20秒のはず)"
+    finally:
+        dc.time = orig
+
+
+def test_user_manual_exists_and_states_the_timing():
+    """取扱説明書があり、途絶時の動作が書かれていること."""
+    import pathlib as _p
+    doc = (_p.Path(__file__).resolve().parent.parent
+           / "docs" / "USER_MANUAL.md")
+    assert doc.exists(), "取扱説明書が無い"
+    t = doc.read_text(encoding="utf-8")
+    for must in ("20秒", "受信途絶時の表示", "決定（反映）", "音声ch"):
+        assert must in t, f"説明書に『{must}』の説明が無い"
+
+
 # ---------------- 今回の既定値と地図スーパーの撤去 ----------------
 
 def test_defaults_are_the_short_address_style():

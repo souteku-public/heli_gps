@@ -18,6 +18,13 @@ set "VMODE=1080i5994"
 set "INDEV=0"
 set "OUTDEV=0"
 set "AVOFFSET=0"
+rem COMPFORMAT = colour path used when compositing the super.
+rem   auto  (default) keeps the input colour untouched: the pass-through
+rem         picture comes out identical to what came in, super-white and
+rem         all. Picks A422, or AYUV on older GStreamer.
+rem   Change this only if asked to - an empty value lets GStreamer decide,
+rem   which goes via RGB and clips white (235) and shifts colour.
+set "COMPFORMAT=auto"
 rem EXTRA: optional flags.
 rem   By default the input stays 1080i - the picture is NOT touched.
 rem   The super is marked interlaced so both compositor inputs match.
@@ -37,7 +44,8 @@ python -c "import numpy, PIL" >nul 2>&1 || goto :err_deps
 echo Starting sender (BURN-IN: input video+audio with super, single SDI out)...
 start "HeliGPS Burn-in" cmd /k python -m gst_heli.app --source decklink --output decklink ^
     --output-mode burnin --osc-control --channel %CHANNEL% --mode %MODE% --vmode %VMODE% ^
-    --in-device %INDEV% --out-device %OUTDEV% --av-offset-ms %AVOFFSET% %EXTRA%
+    --in-device %INDEV% --out-device %OUTDEV% --av-offset-ms %AVOFFSET% ^
+    --comp-format %COMPFORMAT% %EXTRA%
 
 echo Starting control UI...
 where pythonw >nul 2>&1 && ( start "" pythonw control_ui.py ) || ( start "" python control_ui.py )

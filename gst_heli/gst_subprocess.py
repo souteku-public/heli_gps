@@ -162,7 +162,13 @@ class GstSubprocessBridge:
                  # (プレビュー)が明示的に True を渡すこと。既定に頼って両者が
                  # 食い違うと compositor の交渉が失敗する(not-negotiated)。
                  deinterlace=False, audio_debug=True, audio_timestamp=True,
-                 out_mode="fillkey", av_offset_ms=0, audio_only=False):
+                 out_mode="fillkey", av_offset_ms=0, audio_only=False,
+                 comp_format="auto"):
+        # バーンイン合成時の中間フォーマット(色の通り道)。詳細は
+        # _build_cmd_burnin / _resolve_comp_format を参照。
+        #   "auto" = A422 が使えればそれ、だめなら AYUV(どちらも色を保つ)
+        self.comp_format = comp_format
+        self._comp_format_resolved = None     # auto の判定結果(1回だけ調べる)
         # 切り分け用: 映像出力を一切つながず、GPS音声の取り込みだけを行う。
         # これで「入力が悪いのか、出力が悪いのか」をはっきりさせられる。
         self.audio_only = audio_only
@@ -192,6 +198,10 @@ class GstSubprocessBridge:
         self._audio_srv = None
         self._video_srv = None
         self._frame_bytes = width * height * 4
+        # BGRA変換の作業用。毎フレームの確保と再変換を避けるため(下記 _to_bgra)
+        self._bgra_buf = None
+        self._last_src = None
+        self._last_bgra = None
 
     # ---- 音声受信: S16LE Nch を numpy で on_audio へ ----
     def _audio_handler(self, conn, stopped):
@@ -222,14 +232,50 @@ class GstSubprocessBridge:
                                 + " ".join(f"{x:.3f}" for x in lv))
 
     # ---- 映像送信: frame_provider()のBGRAを送り続ける(TCP背圧でペース調整) ----
+    def _to_bgra(self, rgba) -> bytes:
+        """RGBA(H,W,4) → BGRA の bytes。**同じフレームなら前回の結果を使い回す**.
+
+        ここは1秒に約30回まわる。素直に書くと
+
+            np.ascontiguousarray(rgba[:, :, [2, 1, 0, 3]]).tobytes()
+
+        となるが、1920x1080 でこれが **約17ms**。29.97fps の猶予 33.4ms の
+        半分を1フレームの色順入れ替えだけで使ってしまい、しかも毎秒 500MB 近い
+        確保を繰り返す。制御UIなど他のプロセスがCPUを使うと送出が間に合わず、
+        映像がカクつく原因になっていた。
+
+        対策は2つ:
+
+        1. **再変換しない** — current_frame() は中身が変わらない限り同じ
+           ndarray を返す(renderer.render_layers は描き直したときだけ
+           新しい配列を作る)ので、オブジェクトが同一かどうかだけ見れば
+           再変換の要否が分かる。元フレームの参照を持ち続けるので、
+           解放済みオブジェクトに id が再利用される心配もない。
+           実際に文字が変わるのは時刻の更新などで毎秒1回程度。
+
+        2. **確保し直さない** — 変換が要るときもチャンネルごとの代入で
+           事前確保したバッファに書く(fancy index より約4倍速い)。
+        """
+        if rgba is self._last_src and self._last_bgra is not None:
+            return self._last_bgra
+        buf = self._bgra_buf
+        if buf is None or buf.shape != rgba.shape:
+            buf = self._bgra_buf = np.empty(rgba.shape, dtype=np.uint8)
+        buf[:, :, 0] = rgba[:, :, 2]
+        buf[:, :, 1] = rgba[:, :, 1]
+        buf[:, :, 2] = rgba[:, :, 0]
+        buf[:, :, 3] = rgba[:, :, 3]
+        out = buf.tobytes()
+        self._last_src, self._last_bgra = rgba, out
+        return out
+
     def _video_handler(self, conn, stopped):
         while not stopped():
             rgba = self.frame_provider()
             if rgba is None:
                 time.sleep(0.01)
                 continue
-            # RGBA(H,W,4) → BGRA
-            bgra = np.ascontiguousarray(rgba[:, :, [2, 1, 0, 3]]).tobytes()
+            bgra = self._to_bgra(rgba)
             if len(bgra) != self._frame_bytes:
                 continue
             try:
@@ -374,6 +420,43 @@ class GstSubprocessBridge:
         """テロップを interleaved と名乗らせるか(入力と揃えるため)."""
         return bool(self.interlace and not self.deinterlace)
 
+    def _has_format(self, fmt: str) -> bool:
+        """この環境の GStreamer がその映像フォーマットを扱えるか.
+
+        小さなパイプラインを1フレームだけ流して確かめる(数十ms)。
+        知らないフォーマットを caps に書くと交渉に失敗してパイプライン全体が
+        止まり、**同じパイプラインに居る音声取り込み(GPS)まで道連れになる**。
+        だから「書いてから失敗する」のではなく、先に確かめる。
+        """
+        try:
+            r = subprocess.run(
+                [self.gst, "-q", "videotestsrc", "num-buffers=1", "!",
+                 f"video/x-raw,format={fmt},width=16,height=16", "!", "fakesink"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    def _resolve_comp_format(self) -> str:
+        """合成に使う中間フォーマットを決める.
+
+        A422 は 4:2:2 のままアルファ合成できるので、入力(UYVY 4:2:2)との
+        往復で色差の再サンプリングが起きず、実測で**完全一致**になる。
+        ただし比較的新しい形式(GStreamer 1.24 以降)なので、無い環境では
+        昔からある AYUV(4:4:4+α)に落とす。AYUV でも輝度は完全に保たれ、
+        差が出るのは色差がピクセル単位で切り替わる箇所だけ。
+        """
+        if self.comp_format != "auto":
+            return self.comp_format
+        if self._comp_format_resolved is None:
+            if self._has_format("A422"):
+                self._comp_format_resolved = "A422"
+            else:
+                self.on_log("[comp] A422 が使えないため AYUV で合成します"
+                            "(色は保たれます)")
+                self._comp_format_resolved = "AYUV"
+        return self._comp_format_resolved
+
     def _build_cmd_burnin(self):
         # 入力映像 → (そのまま1080i / 任意でdeinterlace) → compositor.sink_0
         vin = self._video_in(self._compositor_in() + ["comp.sink_0"])
@@ -382,7 +465,34 @@ class GstSubprocessBridge:
         telop = (self._telop_src(self._telop_interlaced())
                  + ["videoconvert", "!", "comp.sink_1"])
         # 合成 → 番組映像として焼き込み出力(keyer=off)
-        comp = ["compositor", "name=comp", "background=black", "!", "videoconvert", "!"]
+        #
+        # ここで **compositor の出力フォーマットを明示する** のが重要。
+        # 指定しないと compositor は BGRA / colorimetry=0:1:0:0(不明)で
+        # 交渉してしまう。すると
+        #
+        #     入力 UYVY/bt709(限定レンジ 16-235)
+        #       → フルレンジRGBへ展開 → 推測した行列・レンジで YUV へ戻す
+        #
+        # という往復が入り、テロップの無い素通し部分まで色が変わる。
+        # 実測(入力=カラーバー等、テロップ完全透過で素通し)では
+        #
+        #     一致画素 6〜25%   白(輝度)が 253→235, 173→170 に切り詰め
+        #
+        # つまり「白のレベルを100%で切っている」という症状そのもの。
+        #
+        # 合成フォーマットを YUV+アルファに固定すると入力の色空間から
+        # 出ないので、素通し部分は入力と一致する:
+        #
+        #     A422(4:2:2+α) 一致 100% / 輝度差 0  ← 既定(auto)
+        #     AYUV(4:4:4+α) 輝度差 0、色差のみ硬い色境界で僅差
+        #
+        # どちらもスーパーホワイトを保持する。アルファ合成が要るので
+        # UYVY や Y42B(アルファ無し)は使えない(実測では真っ黒になる)。
+        comp = ["compositor", "name=comp", "background=black", "!"]
+        cf = self._resolve_comp_format()
+        if cf:
+            comp += [f"video/x-raw,format={cf}", "!"]
+        comp += ["videoconvert", "!"]
         if self.interlace:
             full = (f"video/x-raw,width={self.width},height={self.height},"
                     f"framerate={self.framerate},interlace-mode=interleaved")

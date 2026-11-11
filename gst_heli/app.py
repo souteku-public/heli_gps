@@ -366,6 +366,7 @@ def run(args):
             gst_bin=args.gst_bin, interlace=not args.no_interlace,
             deinterlace=args.deinterlace,
             out_mode=args.output_mode, av_offset_ms=args.av_offset_ms,
+            comp_format=getattr(args, "comp_format", "auto"),
             audio_only=getattr(args, "audio_only", False))
         try:
             bridge.start()
@@ -535,6 +536,10 @@ def build_parser():
                     help="burnin時に入力をデインタレースして合成(既定OFF=iのまま重畳)")
     ap.add_argument("--av-offset-ms", type=int, default=0,
                     help="burnin時のA/V補正[ms](+で音声を遅らせる)")
+    ap.add_argument("--comp-format", default="auto",
+                    help="burnin合成時の中間フォーマット。既定のautoは入力の色を"
+                         "そのまま通す形式(A422、無ければAYUV)を自動で選ぶ。"
+                         "空文字にすると指定なし=GStreamer任せ(色が変わります)")
     ap.add_argument("--in-device", type=int, default=0)
     ap.add_argument("--out-device", type=int, default=0)
     # backend / subprocess方式のオプション
