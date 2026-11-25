@@ -768,6 +768,33 @@ def test_map_super_is_gone_from_the_broadcast_path():
         assert token not in src, f"app.py に {token} が残っている"
 
 
+def test_licensing_docs_do_not_claim_a_map_feature_that_was_removed():
+    """権利関係の資料が、削除済みの地図機能を「ある」と書いていないこと.
+
+    ここが古いままだと、資料を読んで判断を誤るだけでなく、官公庁への
+    照会文（docs/terms/gsi_inquiry_91803.md §5 に文案がある）に
+    実在しない機能の説明が入ったまま送られてしまう。実際に一度そうなった。
+    """
+    import pathlib as _p
+    root = _p.Path(__file__).resolve().parent.parent
+    assert not (root / "gst_heli" / "map_render.py").exists(), \
+        "map_render.py が復活している。復活させるなら本テストも見直すこと"
+
+    # 「いま地図が放送に出せる」と読める表現。将来の再実装を語る文は
+    # 「再実装」「削除済み」等の文脈語を伴うので、断定形だけを禁じる。
+    stale = [
+        "運用者が ON/OFF を選択できます",      # 照会文案の誤記
+        "実装済み・消去不可",                  # 焼き込みクレジットの誤記
+        "地図インセット下部に自動描画され",
+    ]
+    for name in ("LICENSING.md", "ATTRIBUTION.md", "DATA_PROVENANCE.md",
+                 "terms/gsi_inquiry_91803.md"):
+        text = (root / "docs" / name).read_text(encoding="utf-8")
+        for phrase in stale:
+            assert phrase not in text, \
+                f"docs/{name} に削除済み機能の記述『{phrase}』が残っている"
+
+
 def test_map_osc_messages_are_ignored():
     """古いUIから Map* が届いても何も起きないこと."""
     c, cfg, ls = _ctrl()
